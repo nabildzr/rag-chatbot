@@ -1,0 +1,12 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Go
+/bin/
+*.exe
+
+# Frontend
+web/node_modules/
+web/dist/
