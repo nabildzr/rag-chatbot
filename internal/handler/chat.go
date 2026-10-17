@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -122,6 +123,21 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	sources := rag.SelectSources(toSources(mergeHits(hits, topK)), h.deps.MinScore, h.deps.ScoreMargin)
 
+	// Questions about a whole document ("what is this about?") match no chunk
+	// better than off-topic ones do, so scores cannot tell them apart. With one
+	// document selected, fall back to its opening chunks and let the model decide.
+	overview := false
+	if len(sources) == 0 && req.DocumentID != "" {
+		var err error
+		sources, err = h.overviewSources(ctx, req.DocumentID)
+		if err != nil {
+			log.Printf("chat: overview: %v", err)
+			writeError(w, http.StatusBadGateway, "search failed")
+			return
+		}
+		overview = len(sources) > 0
+	}
+
 	sse, err := newSSE(w)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
@@ -138,7 +154,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	messages := make([]llm.Message, 0, len(history)+2)
 	messages = append(messages, llm.Message{Role: "system", Content: rag.SystemPrompt})
 	messages = append(messages, history...)
-	messages = append(messages, llm.Message{Role: "user", Content: rag.BuildUserPrompt(req.Question, sources)})
+	messages = append(messages, llm.Message{Role: "user", Content: rag.BuildUserPrompt(req.Question, sources, overview)})
 	err = h.deps.LLM.Stream(ctx, messages, func(token string) error {
 		return sse.send("token", map[string]string{"text": token})
 	})
@@ -151,6 +167,26 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	sse.send("sources", sources)
 	sse.send("done", struct{}{})
+}
+
+// overviewSources returns the first rag.OverviewChunks chunks of a document.
+// They carry no similarity score (0).
+func (h *Handler) overviewSources(ctx context.Context, docID string) ([]rag.Source, error) {
+	var sources []rag.Source
+	for i := 0; i < rag.OverviewChunks; i++ {
+		filter := &vector.Filter{Must: []vector.Condition{
+			{Key: "document_id", Match: vector.MatchValue{Value: docID}},
+			{Key: "chunk_index", Match: vector.MatchValue{Value: i}},
+		}}
+		records, _, err := h.deps.Vectors.Scroll(ctx, Collection, filter, 1, nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, rec := range records {
+			sources = append(sources, toSources([]vector.ScoredPoint{{ID: rec.ID, Payload: rec.Payload}})...)
+		}
+	}
+	return sources, nil
 }
 
 // mergeHits de-duplicates points found by several queries, keeping each

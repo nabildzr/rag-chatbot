@@ -9,6 +9,15 @@ import (
 
 // buildPDF writes a minimal valid PDF with one text line per page.
 func buildPDF(lines ...string) []byte {
+	streams := make([]string, len(lines))
+	for i, line := range lines {
+		streams[i] = fmt.Sprintf("BT /F1 12 Tf 72 720 Td (%s) Tj ET", line)
+	}
+	return buildPDFStreams(streams...)
+}
+
+// buildPDFStreams writes a minimal valid PDF with one raw content stream per page.
+func buildPDFStreams(lines ...string) []byte {
 	var objs []string
 	kids := make([]string, len(lines))
 	for i := range lines {
@@ -20,7 +29,7 @@ func buildPDF(lines ...string) []byte {
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
 	)
 	for i, line := range lines {
-		stream := fmt.Sprintf("BT /F1 12 Tf 72 720 Td (%s) Tj ET", line)
+		stream := line
 		objs = append(objs,
 			fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>", 5+2*i),
 			fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(stream), stream),
@@ -59,5 +68,28 @@ func TestExtractPages(t *testing.T) {
 func TestExtractMalformed(t *testing.T) {
 	if _, err := Extract([]byte("%PDF-1.4 garbage")); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// LaTeX-style output: words are separate strings positioned with TJ kerning
+// instead of space characters, and a word is hyphenated across two lines.
+func TestExtractPositionedWords(t *testing.T) {
+	stream := "BT /F1 12 Tf 72 720 Td [(Dropout) -400 (prevents) -400 (overfit-)] TJ " +
+		"0 -14 Td [(ting) -400 (in) -400 (nets.)] TJ " +
+		"0 -14 Td [(Second) -400 (line.)] TJ ET"
+	pages, err := Extract(buildPDFStreams(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Dropout prevents overfitting in nets.\nSecond line."
+	if len(pages) != 1 || pages[0].Text != want {
+		t.Fatalf("got %+v, want %q", pages, want)
+	}
+}
+
+func TestTidy(t *testing.T) {
+	got := tidy("  a   b \n\n well-\nknown  \nX-\nRay")
+	if got != "a b\nwellknown\nX-\nRay" {
+		t.Fatalf("got %q", got)
 	}
 }

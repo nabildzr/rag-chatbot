@@ -70,9 +70,20 @@ func RetrievalQuery(question, previousQuestion string) string {
 	return previousQuestion + "\n" + question
 }
 
+// OverviewChunks is how many leading chunks of a document are used as
+// context when no chunk matches the question (summary-style questions).
+const OverviewChunks = 2
+
 // BuildUserPrompt numbers each source as [1]..[n] and appends the question.
-func BuildUserPrompt(question string, sources []Source) string {
+// overview marks sources that are the start of the document rather than
+// search hits, so the model knows they may not answer the question.
+func BuildUserPrompt(question string, sources []Source, overview bool) string {
 	var b strings.Builder
+	if overview {
+		b.WriteString("No passage matched the question directly. Below is the beginning of the document. " +
+			"Use it for questions about the document as a whole (its topic, main idea, summary). " +
+			"For anything else, say you could not find it in the documents.\n\n")
+	}
 	b.WriteString("Context:\n\n")
 	for i, s := range sources {
 		fmt.Fprintf(&b, "[%d] (%s, page %d)\n%s\n\n", i+1, s.Filename, s.Page, s.Text)

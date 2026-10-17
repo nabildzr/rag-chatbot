@@ -305,7 +305,7 @@ function MessageView({ message: m }: { message: Message }) {
               <button onClick={() => setOpenSource(openSource === i ? null : i)}>
                 <span className="cite">{i + 1}</span>
                 {s.filename}, hlm {s.page}
-                <span className="score">{(s.score * 100).toFixed(0)}%</span>
+                <span className="score">{s.score > 0 ? `${(s.score * 100).toFixed(0)}%` : 'awal dokumen'}</span>
               </button>
               {openSource === i && <blockquote>{s.text}</blockquote>}
             </li>
@@ -325,7 +325,9 @@ function buildHistory(messages: Message[]): Turn[] {
   for (let i = 0; i + 1 < messages.length; i++) {
     const q = messages[i]
     const a = messages[i + 1]
-    if (q.role === 'user' && a.role === 'assistant' && !a.error && !a.streaming && a.content) {
+    // Answers without sources are "not found" replies; they add nothing but
+    // would steer the next retrieval toward an unanswerable question.
+    if (q.role === 'user' && a.role === 'assistant' && !a.error && !a.streaming && a.content && a.sources?.length) {
       turns.push({ role: 'user', content: q.content }, { role: 'assistant', content: a.content })
       i++
     }

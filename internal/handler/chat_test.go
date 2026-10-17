@@ -184,3 +184,29 @@ func TestMergeHitsKeepsBestScore(t *testing.T) {
 		t.Fatalf("bad merge: %+v", merged)
 	}
 }
+
+func TestChatOverviewFallbackForSelectedDocument(t *testing.T) {
+	store := &searchStore{
+		fakeStore: fakeStore{exists: true, points: []vector.Point{
+			chunkPoint("d1", "paper.pdf", "t", 0, 10, 10),
+			chunkPoint("d1", "paper.pdf", "t", 1, 10, 10),
+			chunkPoint("d1", "paper.pdf", "t", 5, 10, 10),
+			chunkPoint("d2", "other.pdf", "t", 0, 1, 1),
+		}},
+		hits: []vector.ScoredPoint{{ID: "p1", Score: 0.55, Payload: oneHit[0].Payload}},
+	}
+	model := &fakeLLM{tokens: []string{"Ringkasan."}}
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: store, LLM: model, MinScore: 0.64}).Routes()
+
+	body := postChat(h, `{"question":"apa inti dokumen ini?","document_id":"d1"}`).Body.String()
+	if model.messages == nil {
+		t.Fatalf("LLM not called; body=%s", body)
+	}
+	prompt := model.messages[len(model.messages)-1].Content
+	if !strings.Contains(prompt, "beginning of the document") || strings.Count(prompt, "(paper.pdf, page") != 2 {
+		t.Fatalf("bad overview prompt: %q", prompt)
+	}
+	if !strings.Contains(body, `"score":0`) {
+		t.Fatalf("overview sources should have score 0: %s", body)
+	}
+}
