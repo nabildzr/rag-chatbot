@@ -56,8 +56,10 @@ type ChatHandlers = {
 
 // streamChat posts a question and dispatches Server-Sent Events as they arrive.
 // It resolves on "done" and rejects on "error", HTTP errors or abort.
+export type Turn = { role: 'user' | 'assistant'; content: string }
+
 export async function streamChat(
-  req: { question: string; document_id?: string },
+  req: { question: string; document_id?: string; history?: Turn[] },
   handlers: ChatHandlers,
   signal?: AbortSignal,
 ): Promise<void> {

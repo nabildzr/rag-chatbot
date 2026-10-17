@@ -2,6 +2,7 @@ package rag
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -47,8 +48,27 @@ const SystemPrompt = `You answer questions using only the numbered context passa
 Rules:
 - Cite the passages you use with their numbers in plain ASCII square brackets, e.g. [1] or [2][3].
 - If the context does not contain the answer, say you could not find it in the documents. Do not guess.
+- Earlier turns of the conversation are given for context only; facts must still come from the passages.
 - Answer in the same language as the question.
 - Be concise.`
+
+var citationRe = regexp.MustCompile(`\s*(?:\[\d+\]|【\d+】)`)
+
+// StripCitations removes [n] markers. Old answers in the history refer to an
+// earlier numbering of sources, which would confuse the model.
+func StripCitations(s string) string {
+	return citationRe.ReplaceAllString(s, "")
+}
+
+// RetrievalQuery is the text embedded for search. Follow-ups such as
+// "and for overtime?" carry little meaning alone, so the previous user
+// question is prepended to give the search the topic.
+func RetrievalQuery(question, previousQuestion string) string {
+	if previousQuestion == "" {
+		return question
+	}
+	return previousQuestion + "\n" + question
+}
 
 // BuildUserPrompt numbers each source as [1]..[n] and appends the question.
 func BuildUserPrompt(question string, sources []Source) string {

@@ -6,6 +6,7 @@ import {
   streamChat,
   type DocumentInfo,
   type Source,
+  type Turn,
 } from './api'
 import './App.css'
 
@@ -107,6 +108,7 @@ export default function App() {
     const question = input.trim()
     if (!question || busy) return
 
+    const history = buildHistory(messages)
     const userId = nextId++
     const assistantId = nextId++
     setMessages((ms) => [
@@ -121,7 +123,7 @@ export default function App() {
     abortRef.current = ctrl
     try {
       await streamChat(
-        { question, document_id: activeDoc || undefined },
+        { question, document_id: activeDoc || undefined, history },
         {
           onToken: (t) => patchMessage(assistantId, (m) => ({ content: m.content + t })),
           onSources: (sources) => patchMessage(assistantId, () => ({ sources })),
@@ -239,7 +241,12 @@ export default function App() {
 
       <main className="chat">
         <header className="chat-header">
-          Bertanya ke: <strong>{activeName ?? 'semua dokumen'}</strong>
+          <span>
+            Bertanya ke: <strong>{activeName ?? 'semua dokumen'}</strong>
+          </span>
+          <button className="new-chat" onClick={() => setMessages([])} disabled={busy || messages.length === 0}>
+            Chat baru
+          </button>
         </header>
 
         <div className="messages">
@@ -307,6 +314,23 @@ function MessageView({ message: m }: { message: Message }) {
       )}
     </div>
   )
+}
+
+// The server keeps no state, so each request carries the last few exchanges.
+// Only complete question/answer pairs are sent; failed or stopped answers are skipped.
+const MAX_HISTORY = 6
+
+function buildHistory(messages: Message[]): Turn[] {
+  const turns: Turn[] = []
+  for (let i = 0; i + 1 < messages.length; i++) {
+    const q = messages[i]
+    const a = messages[i + 1]
+    if (q.role === 'user' && a.role === 'assistant' && !a.error && !a.streaming && a.content) {
+      turns.push({ role: 'user', content: q.content }, { role: 'assistant', content: a.content })
+      i++
+    }
+  }
+  return turns.slice(-MAX_HISTORY)
 }
 
 // withCitations turns "[2]" in the answer into a button that opens source 2.

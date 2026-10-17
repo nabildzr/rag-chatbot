@@ -174,8 +174,34 @@
   font-size: 14px;
 }
 
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .chat-header strong {
   color: var(--text);
+}
+
+.new-chat {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.new-chat:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.new-chat:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .messages {

@@ -25,7 +25,8 @@ upsert ke collection Qdrant `chunks`. Kalau gagal di tengah jalan, point yang su
 masuk dihapus lagi, jadi dokumen tidak pernah setengah terindeks.
 
 **Chat** (`POST /chat`): pertanyaan → embedding → similarity search top-5 di Qdrant
-(opsional difilter per dokumen) → filter skor relevansi → prompt dengan konteks
+(opsional difilter per dokumen; untuk pertanyaan lanjutan dicari juga dengan
+pertanyaan sebelumnya sebagai konteks) → filter skor relevansi → prompt dengan konteks
 bernomor → Groq (streaming) → Server-Sent Events ke browser: `token`… lalu `sources`,
 lalu `done`. Kalau tidak ada chunk yang lolos filter, API langsung menjawab "tidak
 ditemukan" tanpa memanggil LLM.
@@ -69,6 +70,14 @@ Prasyarat: Go 1.22+, Node.js 20+, Docker.
    go run ./cmd/api
    ```
 
+   Atau dengan live reload via [Air](https://github.com/air-verse/air), yang
+   rebuild otomatis tiap file `.go` atau `.env` berubah:
+
+   ```bash
+   go install github.com/air-verse/air@latest
+   air
+   ```
+
 4. Jalankan frontend (port 5173). Vite mem-proxy `/api/*` ke `localhost:8080`:
 
    ```bash
@@ -103,7 +112,7 @@ selalu menang, jadi di production cukup set lewat systemd, Docker, atau sejenisn
 |----------|-------------------|------------|
 | `GET`    | `/health`         | Health check |
 | `POST`   | `/ingest`         | Multipart field `file` (PDF, maks 20 MB) → `{document_id, filename, pages, chunks}` |
-| `POST`   | `/chat`           | `{question, document_id?}` → stream SSE |
+| `POST`   | `/chat`           | `{question, document_id?, history?}` → stream SSE |
 | `GET`    | `/documents`      | Daftar dokumen, terbaru dulu |
 | `DELETE` | `/documents/{id}` | Hapus dokumen beserta semua chunk-nya (`204`, atau `404` jika tidak ada) |
 
@@ -156,6 +165,13 @@ atau API key.
   diberi payload index. Daftar dokumen dibaca dari chunk ke-0 setiap dokumen.
 - **Prefix tugas nomic.** Chunk di-embed dengan prefix `search_document:` dan
   pertanyaan dengan `search_query:`, sesuai cara model dilatih.
+- **Percakapan multi-turn tanpa state di server.** Client mengirim `history`
+  (`[{role, content}]`, maksimal 6 pesan terakhir). Server membuang role selain
+  `user`/`assistant` dan menghapus sitasi lama dari jawaban sebelumnya. Retrieval
+  dijalankan dua kali, dengan pertanyaan saja dan dengan pertanyaan sebelumnya +
+  pertanyaan sekarang, lalu skor terbaik per chunk diambil. Pertanyaan lanjutan
+  seperti "kalau klaimnya kapan?" tetap menemukan chunk yang tepat, dan pergantian
+  topik tidak terganggu konteks lama.
 - **Filter skor dua lapis.** Ambang absolut (`MIN_SCORE`) menolak pertanyaan di luar
   topik dokumen. Margin relatif (`SCORE_MARGIN`) membuang chunk lemah yang jauh di
   bawah hit teratas, supaya tidak ikut ke prompt dan tidak muncul sebagai sumber.

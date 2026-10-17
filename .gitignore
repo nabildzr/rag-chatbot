@@ -10,3 +10,6 @@
 # Frontend
 web/node_modules/
 web/dist/
+
+# Air live reload
+/tmp/

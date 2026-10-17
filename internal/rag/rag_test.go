@@ -70,3 +70,9 @@ func TestSelectSources(t *testing.T) {
 		}
 	}
 }
+
+func TestStripCitations(t *testing.T) {
+	if got := StripCitations("14 hari [1][2] dan Rp75.000 【3】."); got != "14 hari dan Rp75.000." {
+		t.Fatalf("got %q", got)
+	}
+}

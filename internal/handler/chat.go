@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -16,12 +17,51 @@ import (
 const (
 	topK           = 5
 	maxQuestionLen = 2000 // characters
+	maxHistory     = 6    // messages (3 exchanges) kept for context
+	maxTurnLen     = 2000 // characters per history message
 	notFoundAnswer = "Maaf, saya tidak menemukan informasi itu di dokumen."
 )
 
 type chatRequest struct {
-	Question   string `json:"question"`
-	DocumentID string `json:"document_id"` // optional; empty searches all documents
+	Question   string        `json:"question"`
+	DocumentID string        `json:"document_id"` // optional; empty searches all documents
+	History    []llm.Message `json:"history"`     // optional; earlier turns, oldest first
+}
+
+// cleanHistory keeps the last maxHistory user/assistant messages, truncates
+// long ones and strips stale citation markers. Clients are stateless, so
+// anything else they send (system roles, empty turns) is dropped.
+func cleanHistory(history []llm.Message) []llm.Message {
+	var out []llm.Message
+	for _, m := range history {
+		if m.Role != "user" && m.Role != "assistant" {
+			continue
+		}
+		content := strings.TrimSpace(m.Content)
+		if m.Role == "assistant" {
+			content = rag.StripCitations(content)
+		}
+		if content == "" {
+			continue
+		}
+		if r := []rune(content); len(r) > maxTurnLen {
+			content = string(r[:maxTurnLen]) + "…"
+		}
+		out = append(out, llm.Message{Role: m.Role, Content: content})
+	}
+	if len(out) > maxHistory {
+		out = out[len(out)-maxHistory:]
+	}
+	return out
+}
+
+func lastUserMessage(history []llm.Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "user" {
+			return history[i].Content
+		}
+	}
+	return ""
 }
 
 // chat answers a question over Server-Sent Events:
@@ -49,24 +89,38 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	qvec, err := h.deps.Embedder.EmbedQuery(ctx, req.Question)
-	if err != nil {
-		log.Printf("chat: embed: %v", err)
-		writeError(w, http.StatusBadGateway, "embedding failed")
-		return
+	history := cleanHistory(req.History)
+
+	// Search with the question alone and, for follow-ups, with the previous
+	// question prepended. The standalone query wins when the topic changes,
+	// the combined one when the question only makes sense in context.
+	queries := []string{req.Question}
+	if prev := lastUserMessage(history); prev != "" {
+		queries = append(queries, rag.RetrievalQuery(req.Question, prev))
 	}
 	var filter *vector.Filter
 	if req.DocumentID != "" {
 		filter = vector.MatchField("document_id", req.DocumentID)
 	}
-	hits, err := h.deps.Vectors.Search(ctx, Collection, qvec, topK, filter)
-	if err != nil {
-		log.Printf("chat: search: %v", err)
-		writeError(w, http.StatusBadGateway, "search failed")
-		return
+
+	ctx := r.Context()
+	var hits []vector.ScoredPoint
+	for _, q := range queries {
+		qvec, err := h.deps.Embedder.EmbedQuery(ctx, q)
+		if err != nil {
+			log.Printf("chat: embed: %v", err)
+			writeError(w, http.StatusBadGateway, "embedding failed")
+			return
+		}
+		found, err := h.deps.Vectors.Search(ctx, Collection, qvec, topK, filter)
+		if err != nil {
+			log.Printf("chat: search: %v", err)
+			writeError(w, http.StatusBadGateway, "search failed")
+			return
+		}
+		hits = append(hits, found...)
 	}
-	sources := rag.SelectSources(toSources(hits), h.deps.MinScore, h.deps.ScoreMargin)
+	sources := rag.SelectSources(toSources(mergeHits(hits, topK)), h.deps.MinScore, h.deps.ScoreMargin)
 
 	sse, err := newSSE(w)
 	if err != nil {
@@ -81,10 +135,10 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages := []llm.Message{
-		{Role: "system", Content: rag.SystemPrompt},
-		{Role: "user", Content: rag.BuildUserPrompt(req.Question, sources)},
-	}
+	messages := make([]llm.Message, 0, len(history)+2)
+	messages = append(messages, llm.Message{Role: "system", Content: rag.SystemPrompt})
+	messages = append(messages, history...)
+	messages = append(messages, llm.Message{Role: "user", Content: rag.BuildUserPrompt(req.Question, sources)})
 	err = h.deps.LLM.Stream(ctx, messages, func(token string) error {
 		return sse.send("token", map[string]string{"text": token})
 	})
@@ -97,6 +151,29 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	sse.send("sources", sources)
 	sse.send("done", struct{}{})
+}
+
+// mergeHits de-duplicates points found by several queries, keeping each
+// point's best score, and returns the top k by score.
+func mergeHits(hits []vector.ScoredPoint, k int) []vector.ScoredPoint {
+	best := map[string]int{} // point ID -> index in out
+	var out []vector.ScoredPoint
+	for _, h := range hits {
+		key := fmt.Sprint(h.ID)
+		if i, ok := best[key]; ok {
+			if h.Score > out[i].Score {
+				out[i] = h
+			}
+			continue
+		}
+		best[key] = len(out)
+		out = append(out, h)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if len(out) > k {
+		out = out[:k]
+	}
+	return out
 }
 
 func toSources(hits []vector.ScoredPoint) []rag.Source {
