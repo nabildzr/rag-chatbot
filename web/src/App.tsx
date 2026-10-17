@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   deleteDocument,
   ingestPDF,
@@ -291,10 +293,9 @@ function MessageView({ message: m }: { message: Message }) {
 
   return (
     <div className={`msg ${m.role}`}>
-      <div className="bubble">
-        {m.role === 'assistant' ? withCitations(m.content, m.sources, setOpenSource) : m.content}
+      <div className={`bubble${m.streaming && m.content ? ' streaming' : ''}`}>
+        {m.role === 'assistant' ? <AnswerMarkdown text={m.content} sources={m.sources} open={setOpenSource} /> : m.content}
         {m.streaming && !m.content && <span className="typing">Mencari jawaban…</span>}
-        {m.streaming && m.content && <span className="cursor" />}
         {m.error && <p className="msg-error">{m.error}</p>}
       </div>
 
@@ -335,19 +336,45 @@ function buildHistory(messages: Message[]): Turn[] {
   return turns.slice(-MAX_HISTORY)
 }
 
-// withCitations turns "[2]" in the answer into a button that opens source 2.
-// Some models (gpt-oss) write fullwidth brackets "【2】", so accept both.
-function withCitations(text: string, sources: Source[] | undefined, open: (i: number) => void): ReactNode[] {
-  return text.split(/(\[\d+\]|【\d+】)/g).map((part, i) => {
-    const digits = /^(?:\[(\d+)\]|【(\d+)】)$/.exec(part)?.slice(1).find(Boolean)
-    const n = digits ? Number(digits) : 0
-    if (sources && n >= 1 && n <= sources.length) {
-      return (
-        <button key={i} className="cite" onClick={() => open(n - 1)} title={`${sources[n - 1].filename}, hlm ${sources[n - 1].page}`}>
-          {n}
-        </button>
-      )
-    }
-    return part
-  })
+// Citations "[2]" (or fullwidth "【2】", which gpt-oss uses) become links to
+// "#cite-2" before Markdown parsing, so the link renderer below can turn them
+// into buttons. "[x](url)" links and "[x]: url" definitions are left alone.
+const CITATION = /\[(\d+)\](?![(:[])|【(\d+)】/g
+
+function linkCitations(text: string): string {
+  return text.replace(CITATION, (_, a, b) => `[${a ?? b}](#cite-${a ?? b})`)
+}
+
+function AnswerMarkdown({ text, sources, open }: { text: string; sources?: Source[]; open: (i: number) => void }) {
+  return (
+    <div className="md">
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a({ href, children }) {
+            const n = href?.startsWith('#cite-') ? Number(href.slice(6)) : 0
+            if (n) {
+              const s = sources?.[n - 1]
+              // Sources arrive after the answer has streamed; until then the
+              // marker is shown but not clickable.
+              return s ? (
+                <button className="cite" onClick={() => open(n - 1)} title={`${s.filename}, hlm ${s.page}`}>
+                  {n}
+                </button>
+              ) : (
+                <span className="cite">{n}</span>
+              )
+            }
+            return (
+              <a href={href} target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            )
+          },
+        }}
+      >
+        {linkCitations(text)}
+      </Markdown>
+    </div>
+  )
 }

@@ -252,13 +252,16 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-bottom-left-radius: 4px;
+  white-space: normal; /* Markdown supplies the structure */
 }
 
 .typing {
   color: var(--muted);
 }
 
-.cursor {
+/* Blinking caret after the last block while the answer streams. */
+.bubble.streaming .md > :last-child::after {
+  content: '';
   display: inline-block;
   width: 7px;
   height: 1em;
@@ -266,6 +269,91 @@
   vertical-align: text-bottom;
   background: var(--accent);
   animation: blink 1s steps(2) infinite;
+}
+
+/* Markdown answer */
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md table,
+.md blockquote {
+  margin: 0 0 10px;
+}
+
+.md ul,
+.md ol {
+  padding-left: 22px;
+}
+
+.md li + li {
+  margin-top: 3px;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  margin: 14px 0 6px;
+  font-size: 1em;
+  font-weight: 700;
+}
+
+.md a {
+  color: var(--accent);
+}
+
+.md code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.md pre {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  overflow-x: auto;
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+}
+
+.md blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.93em;
+}
+
+.md th,
+.md td {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.md th {
+  background: var(--accent-soft);
 }
 
 @keyframes blink {
