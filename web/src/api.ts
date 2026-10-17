@@ -4,17 +4,28 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 export type Source = {
   document_id: string
   filename: string
+  kind: string
+  section_title?: string
   page: number
   chunk_index: number
   score: number
   text: string
 }
 
-export type IngestResult = {
+export type DocumentInfo = {
   document_id: string
   filename: string
+  kind: string
   pages: number
   chunks: number
+  created_at: string
+}
+
+// unitLabel names what a page number counts for a file kind.
+export function unitLabel(kind: string): string {
+  if (kind === 'pptx') return 'slide'
+  if (kind === 'pdf' || !kind) return 'hlm'
+  return 'bagian'
 }
 
 export class ApiError extends Error {
@@ -61,15 +72,13 @@ function adminHeaders(): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-export type AppConfig = { admin_required: boolean }
+export type AppConfig = { admin_required: boolean; extensions: string[]; max_upload_mb: number }
 
 export async function getConfig(): Promise<AppConfig> {
   const res = await fetch(`${API_BASE}/config`)
   if (!res.ok) throw await errorFrom(res)
   return res.json()
 }
-
-export type DocumentInfo = IngestResult & { created_at: string }
 
 export async function listDocuments(signal?: AbortSignal): Promise<DocumentInfo[]> {
   const res = await fetch(`${API_BASE}/documents`, { signal })
@@ -86,10 +95,42 @@ export async function deleteDocument(id: string): Promise<void> {
   if (!res.ok && res.status !== 404) throw await errorFrom(res)
 }
 
-export async function ingestPDF(file: File, signal?: AbortSignal): Promise<IngestResult> {
+/** Thrown when the same file was already uploaded; carries the existing document. */
+export class DuplicateError extends ApiError {
+  readonly documentId: string
+  constructor(message: string, documentId: string) {
+    super(message, 409)
+    this.documentId = documentId
+  }
+}
+
+export type IngestAccepted = { job_id: string; document_id: string; filename: string }
+
+export async function ingestFile(file: File, signal?: AbortSignal): Promise<IngestAccepted> {
   const form = new FormData()
   form.append('file', file)
   const res = await fetch(`${API_BASE}/ingest`, { method: 'POST', body: form, headers: adminHeaders(), signal })
+  if (res.status === 409) {
+    const body = await res.json()
+    throw new DuplicateError(body.error, body.document_id)
+  }
+  if (!res.ok) throw await errorFrom(res)
+  return res.json()
+}
+
+export type JobStatus = {
+  job_id: string
+  document_id: string
+  filename: string
+  status: 'queued' | 'extracting' | 'embedding' | 'done' | 'error'
+  done: number
+  total: number
+  error?: string
+  document?: DocumentInfo
+}
+
+export async function getJob(id: string, signal?: AbortSignal): Promise<JobStatus> {
+  const res = await fetch(`${API_BASE}/ingest/${encodeURIComponent(id)}`, { signal })
   if (!res.ok) throw await errorFrom(res)
   return res.json()
 }
@@ -100,7 +141,7 @@ type ChatHandlers = {
 }
 
 // streamChat posts a question and dispatches Server-Sent Events as they arrive.
-// It resolves on "done" and rejects on "error", HTTP errors or abort.
+// It resolves on 'done' and rejects on 'error', HTTP errors or abort.
 export type Turn = { role: 'user' | 'assistant'; content: string }
 
 export async function streamChat(

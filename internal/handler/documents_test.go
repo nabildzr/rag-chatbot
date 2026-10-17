@@ -70,15 +70,29 @@ func TestDeleteDocument(t *testing.T) {
 }
 
 func TestIngestStoresDocFieldsAndIndexes(t *testing.T) {
-	store := &fakeStore{}
-	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: store, ExtractPDF: twoPages}).Routes()
-	upload(t, h, "notes.pdf", []byte("%PDF-1.7"))
+	vs := &fakeStore{}
+	uploadAndWait(t, New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extract: twoPages}), "notes.pdf", []byte("%PDF-1.7"))
 
-	p := store.points[0].Payload
-	if p["doc_pages"] != 2 || p["doc_chunks"] != 2 {
+	p := vs.snapshot()[0].Payload
+	if p["doc_pages"] != 2 || p["doc_chunks"] != 2 || p["kind"] != "pdf" {
 		t.Fatalf("bad doc fields: %v", p)
 	}
-	if len(store.indexes) != 2 {
-		t.Fatalf("want 2 payload indexes, got %v", store.indexes)
+	if len(vs.indexes) != 4 {
+		t.Fatalf("want 4 payload indexes, got %v", vs.indexes)
+	}
+}
+
+func TestListHidesDocumentsStillIndexing(t *testing.T) {
+	pending := chunkPoint("busy", "big.pdf", "2026-03-01T00:00:00Z", 0, 9, 9)
+	pending.Payload["ready"] = false
+	vs := &fakeStore{exists: true, points: []vector.Point{pending, chunkPoint("old", "a.pdf", "t", 0, 1, 1)}}
+
+	rec := httptest.NewRecorder()
+	New(Deps{Vectors: vs}).Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/documents", nil))
+	var docs []document
+	json.NewDecoder(rec.Body).Decode(&docs)
+	// Documents indexed before the "ready" flag existed have no such field and stay visible.
+	if len(docs) != 1 || docs[0].DocumentID != "old" || docs[0].Kind != "pdf" {
+		t.Fatalf("got %+v", docs)
 	}
 }

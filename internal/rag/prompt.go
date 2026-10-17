@@ -10,7 +10,9 @@ import (
 type Source struct {
 	DocumentID string  `json:"document_id"`
 	Filename   string  `json:"filename"`
-	Page       int     `json:"page"`
+	Kind       string  `json:"kind"`                    // pdf, docx, pptx, txt, md
+	Title      string  `json:"section_title,omitempty"` // heading of the section, if any
+	Page       int     `json:"page"`                    // page, slide or section number
 	ChunkIndex int     `json:"chunk_index"`
 	Score      float32 `json:"score"`
 	Text       string  `json:"text"`
@@ -86,9 +88,21 @@ func BuildUserPrompt(question string, sources []Source, overview bool) string {
 	}
 	b.WriteString("Context:\n\n")
 	for i, s := range sources {
-		fmt.Fprintf(&b, "[%d] (%s, page %d)\n%s\n\n", i+1, s.Filename, s.Page, s.Text)
+		fmt.Fprintf(&b, "[%d] (%s, %s %d)\n%s\n\n", i+1, s.Filename, unit(s.Kind), s.Page, s.Text)
 	}
 	b.WriteString("Question: ")
 	b.WriteString(question)
 	return b.String()
+}
+
+// unit names what Source.Page counts for a file kind.
+func unit(kind string) string {
+	switch kind {
+	case "", "pdf":
+		return "page"
+	case "pptx":
+		return "slide"
+	default:
+		return "section"
+	}
 }

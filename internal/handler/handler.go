@@ -9,9 +9,10 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/nabildzr/rag-chatbot/internal/extract"
 	"github.com/nabildzr/rag-chatbot/internal/llm"
-	"github.com/nabildzr/rag-chatbot/internal/rag"
 	"github.com/nabildzr/rag-chatbot/internal/ratelimit"
+	"github.com/nabildzr/rag-chatbot/internal/store"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
@@ -31,6 +32,7 @@ type VectorStore interface {
 	Scroll(ctx context.Context, collection string, filter *vector.Filter, limit int, offset any) ([]vector.Record, any, error)
 	Upsert(ctx context.Context, collection string, points []vector.Point) error
 	Search(ctx context.Context, collection string, v []float32, limit int, filter *vector.Filter) ([]vector.ScoredPoint, error)
+	SetPayload(ctx context.Context, collection string, payload map[string]any, filter *vector.Filter) error
 	DeleteByFilter(ctx context.Context, collection string, filter *vector.Filter) error
 }
 
@@ -38,15 +40,18 @@ type LLM interface {
 	Stream(ctx context.Context, messages []llm.Message, onToken func(string) error) error
 }
 
-// ExtractFunc turns raw PDF bytes into page texts.
-type ExtractFunc func(data []byte) ([]rag.Page, error)
+// ExtractFunc turns an uploaded file into text sections.
+type ExtractFunc func(filename string, data []byte) (*extract.Document, error)
 
 type Deps struct {
 	Embedder   Embedder
 	Vectors    VectorStore
 	LLM        LLM
-	ExtractPDF ExtractFunc
+	Extract    ExtractFunc // nil: extract.Extract
 	VectorSize int
+
+	// Files keeps original uploads for download and re-indexing; nil skips it.
+	Files *store.Files
 
 	// Retrieval filter for /chat; see rag.SelectSources. Zero disables each.
 	MinScore    float32
@@ -62,12 +67,17 @@ type Deps struct {
 }
 
 type Handler struct {
-	deps    Deps
-	indexed atomic.Bool // payload indexes created
+	deps       Deps
+	indexed    atomic.Bool // payload indexes created
+	jobs       jobList
+	ingestSlot chan struct{} // one background ingest at a time
 }
 
 func New(deps Deps) *Handler {
-	return &Handler{deps: deps}
+	if deps.Extract == nil {
+		deps.Extract = extract.Extract
+	}
+	return &Handler{deps: deps, ingestSlot: make(chan struct{}, 1)}
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -75,6 +85,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /health", h.health)
 	mux.HandleFunc("GET /config", h.config)
 	mux.HandleFunc("POST /ingest", h.requireAdmin(h.deps.IngestLimit.Wrap(h.ingest)))
+	mux.HandleFunc("GET /ingest/{id}", h.ingestStatus)
 	mux.HandleFunc("POST /chat", h.deps.ChatLimit.Wrap(h.chat))
 	mux.HandleFunc("GET /documents", h.listDocuments)
 	mux.HandleFunc("DELETE /documents/{id}", h.requireAdmin(h.deleteDocument))
@@ -90,6 +101,8 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"admin_required": h.deps.AdminToken != "",
+		"extensions":     extract.Extensions,
+		"max_upload_mb":  maxUploadBytes >> 20,
 	})
 }
 

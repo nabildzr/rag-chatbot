@@ -13,3 +13,6 @@ web/dist/
 
 # Air live reload
 /tmp/
+
+# Uploaded originals (DATA_DIR)
+/data/

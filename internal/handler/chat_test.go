@@ -68,7 +68,7 @@ func TestChatStreamsTokensThenSources(t *testing.T) {
 	want := []string{
 		"event: token\ndata: {\"text\":\"RAG adalah\"}\n\n",
 		"event: token\ndata: {\"text\":\" retrieval [1]\"}\n\n",
-		"event: sources\ndata: [{\"document_id\":\"d1\",\"filename\":\"notes.pdf\",\"page\":3,\"chunk_index\":7,\"score\":0.87,",
+		"event: sources\ndata: [{\"document_id\":\"d1\",\"filename\":\"notes.pdf\",\"kind\":\"pdf\",\"page\":3,\"chunk_index\":7,\"score\":0.87,",
 		"event: done\n",
 	}
 	last := 0

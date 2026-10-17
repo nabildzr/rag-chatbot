@@ -42,9 +42,33 @@ type ScoredPoint struct {
 	Payload map[string]any `json:"payload"`
 }
 
-// Filter mirrors Qdrant's filter object. Only "must" is supported for now.
+// Filter mirrors Qdrant's filter object with equality conditions.
 type Filter struct {
-	Must []Condition `json:"must,omitempty"`
+	Must    []Condition `json:"must,omitempty"`
+	MustNot []Condition `json:"must_not,omitempty"`
+}
+
+// And returns a copy of f with an extra required condition; f may be nil.
+func (f *Filter) And(key string, value any) *Filter {
+	out := &Filter{}
+	if f != nil {
+		out.Must = append(out.Must, f.Must...)
+		out.MustNot = append(out.MustNot, f.MustNot...)
+	}
+	out.Must = append(out.Must, Condition{Key: key, Match: MatchValue{Value: value}})
+	return out
+}
+
+// Not returns a copy of f that also excludes payload[key] == value. Points
+// without the key are kept, which makes it safe for fields added later.
+func (f *Filter) Not(key string, value any) *Filter {
+	out := &Filter{}
+	if f != nil {
+		out.Must = append(out.Must, f.Must...)
+		out.MustNot = append(out.MustNot, f.MustNot...)
+	}
+	out.MustNot = append(out.MustNot, Condition{Key: key, Match: MatchValue{Value: value}})
+	return out
 }
 
 type Condition struct {
@@ -154,6 +178,12 @@ func (c *Client) Scroll(ctx context.Context, collection string, filter *Filter, 
 func (c *Client) CreatePayloadIndex(ctx context.Context, collection, field, schema string) error {
 	body := map[string]any{"field_name": field, "field_schema": schema}
 	return c.do(ctx, http.MethodPut, "/collections/"+url.PathEscape(collection)+"/index?wait=true", body, nil)
+}
+
+// SetPayload merges payload into every point matching filter.
+func (c *Client) SetPayload(ctx context.Context, collection string, payload map[string]any, filter *Filter) error {
+	body := map[string]any{"payload": payload, "filter": filter}
+	return c.do(ctx, http.MethodPost, "/collections/"+url.PathEscape(collection)+"/points/payload?wait=true", body, nil)
 }
 
 // DeleteByFilter removes every point matching filter.

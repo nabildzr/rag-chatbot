@@ -5,12 +5,16 @@ import {
   ApiError,
   deleteDocument,
   getAdminToken,
+  DuplicateError,
   getConfig,
-  ingestPDF,
+  getJob,
+  ingestFile,
   listDocuments,
   setAdminToken,
   streamChat,
+  unitLabel,
   type AppConfig,
+  type JobStatus,
   type DocumentInfo,
   type Source,
   type Turn,
@@ -58,6 +62,7 @@ export default function App() {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [activeDoc, setActiveDoc] = useState<string>('') // '' = all documents
   const [uploading, setUploading] = useState(false)
+  const [job, setJob] = useState<JobStatus | null>(null)
   const [uploadError, setUploadError] = useState('')
   const [dragOver, setDragOver] = useState(false)
 
@@ -90,7 +95,7 @@ export default function App() {
     refreshDocs(ctrl.signal)
     getConfig()
       .then(setConfig)
-      .catch(() => setConfig({ admin_required: false }))
+      .catch(() => setConfig({ admin_required: false, extensions: ['.pdf'], max_upload_mb: 20 }))
     return () => ctrl.abort()
   }, [])
   useEffect(() => {
@@ -98,20 +103,46 @@ export default function App() {
   }, [messages])
 
   async function upload(file: File) {
-    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-      setUploadError('File harus PDF.')
+    const exts = config?.extensions ?? ['.pdf']
+    const name = file.name.toLowerCase()
+    if (!exts.some((e) => name.endsWith(e))) {
+      setUploadError(`Format belum didukung. Pilih: ${exts.join(', ')}`)
+      return
+    }
+    const maxMB = config?.max_upload_mb ?? 20
+    if (file.size > maxMB << 20) {
+      setUploadError(`File lebih dari ${maxMB} MB.`)
       return
     }
     setUploading(true)
     setUploadError('')
+    setJob(null)
     try {
-      const doc = await ingestPDF(file)
+      const accepted = await ingestFile(file)
+      // Indexing runs on the server; poll until it finishes.
+      let status: JobStatus
+      for (;;) {
+        status = await getJob(accepted.job_id)
+        setJob(status)
+        if (status.status === 'done' || status.status === 'error') break
+        await new Promise((r) => setTimeout(r, 800))
+      }
+      if (status.status === 'error') {
+        setUploadError(status.error ?? 'Pemrosesan gagal.')
+        return
+      }
       await refreshDocs()
-      setActiveDoc(doc.document_id)
+      setActiveDoc(accepted.document_id)
     } catch (err) {
+      if (err instanceof DuplicateError) {
+        setUploadError(`${err.message}. Dokumen itu dipilih.`)
+        setActiveDoc(err.documentId)
+        return
+      }
       setUploadError(handleAuthError(err))
     } finally {
       setUploading(false)
+      setJob(null)
     }
   }
 
@@ -238,17 +269,20 @@ export default function App() {
           onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && fileRef.current?.click()}
         >
           {uploading ? (
-            <span>Memproses PDF…</span>
+            <UploadProgress job={job} />
           ) : (
             <>
-              <strong>Upload PDF</strong>
-              <span>Klik atau drag file ke sini (maks 20 MB)</span>
+              <strong>Upload dokumen</strong>
+              <span>
+                {(config?.extensions ?? ['.pdf']).filter((e) => e !== '.markdown').map((e) => e.slice(1).toUpperCase()).join(', ')} · maks{' '}
+                {config?.max_upload_mb ?? 20} MB
+              </span>
             </>
           )}
           <input
             ref={fileRef}
             type="file"
-            accept="application/pdf,.pdf"
+            accept={(config?.extensions ?? ['.pdf']).join(',')}
             hidden
             onChange={(e) => {
               const file = e.target.files?.[0]
@@ -286,7 +320,7 @@ export default function App() {
               >
                 <span className="doc-name">{d.filename}</span>
                 <span className="doc-meta">
-                  {d.pages} hlm · {d.chunks} chunk
+                  {d.pages} {unitLabel(d.kind)} · {d.chunks} chunk
                 </span>
               </button>
               {canEdit && (
@@ -369,7 +403,8 @@ function MessageView({ message: m }: { message: Message }) {
             <li key={i} className={openSource === i ? 'open' : ''}>
               <button onClick={() => setOpenSource(openSource === i ? null : i)}>
                 <span className="cite">{i + 1}</span>
-                {s.filename}, hlm {s.page}
+                {s.filename}, {unitLabel(s.kind)} {s.page}
+                {s.section_title && <span className="section-title-tag">{s.section_title}</span>}
                 <span className="score">{s.score > 0 ? `${(s.score * 100).toFixed(0)}%` : 'awal dokumen'}</span>
               </button>
               {openSource === i && <blockquote>{s.text}</blockquote>}
@@ -422,7 +457,7 @@ function AnswerMarkdown({ text, sources, open }: { text: string; sources?: Sourc
               // Sources arrive after the answer has streamed; until then the
               // marker is shown but not clickable.
               return s ? (
-                <button className="cite" onClick={() => open(n - 1)} title={`${s.filename}, hlm ${s.page}`}>
+                <button className="cite" onClick={() => open(n - 1)} title={`${s.filename}, ${unitLabel(s.kind)} ${s.page}`}>
                   {n}
                 </button>
               ) : (
@@ -439,6 +474,31 @@ function AnswerMarkdown({ text, sources, open }: { text: string; sources?: Sourc
       >
         {linkCitations(text)}
       </Markdown>
+    </div>
+  )
+}
+
+const STAGES: Record<JobStatus['status'], string> = {
+  queued: 'Menunggu antrean…',
+  extracting: 'Membaca isi file…',
+  embedding: 'Membuat embedding…',
+  done: 'Selesai',
+  error: 'Gagal',
+}
+
+function UploadProgress({ job }: { job: JobStatus | null }) {
+  const pct = job && job.total > 0 ? Math.round((job.done / job.total) * 100) : 0
+  return (
+    <div className="progress" role="status" aria-live="polite">
+      <span>{job ? STAGES[job.status] : 'Mengunggah…'}</span>
+      <div className="progress-bar">
+        <div style={{ width: `${job?.status === 'embedding' ? pct : job ? 5 : 2}%` }} />
+      </div>
+      {job?.status === 'embedding' && (
+        <span className="progress-count">
+          {job.done}/{job.total} chunk
+        </span>
+      )}
     </div>
   )
 }

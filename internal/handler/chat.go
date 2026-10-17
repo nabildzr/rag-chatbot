@@ -99,9 +99,10 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	if prev := lastUserMessage(history); prev != "" {
 		queries = append(queries, rag.RetrievalQuery(req.Question, prev))
 	}
-	var filter *vector.Filter
+	// Documents still being indexed are not searchable yet.
+	filter := (*vector.Filter)(nil).Not("ready", false)
 	if req.DocumentID != "" {
-		filter = vector.MatchField("document_id", req.DocumentID)
+		filter = filter.And("document_id", req.DocumentID)
 	}
 
 	ctx := r.Context()
@@ -174,10 +175,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) overviewSources(ctx context.Context, docID string) ([]rag.Source, error) {
 	var sources []rag.Source
 	for i := 0; i < rag.OverviewChunks; i++ {
-		filter := &vector.Filter{Must: []vector.Condition{
-			{Key: "document_id", Match: vector.MatchValue{Value: docID}},
-			{Key: "chunk_index", Match: vector.MatchValue{Value: i}},
-		}}
+		filter := vector.MatchField("document_id", docID).And("chunk_index", i).Not("ready", false)
 		records, _, err := h.deps.Vectors.Scroll(ctx, Collection, filter, 1, nil)
 		if err != nil {
 			return nil, err
@@ -219,6 +217,8 @@ func toSources(hits []vector.ScoredPoint) []rag.Source {
 		sources = append(sources, rag.Source{
 			DocumentID: str(p["document_id"]),
 			Filename:   str(p["filename"]),
+			Kind:       kindOf(p),
+			Title:      str(p["section_title"]),
 			Page:       num(p["page"]),
 			ChunkIndex: num(p["chunk_index"]),
 			Score:      hit.Score,

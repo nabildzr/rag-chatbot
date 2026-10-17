@@ -13,10 +13,10 @@ import (
 	"github.com/nabildzr/rag-chatbot/internal/embed"
 	"github.com/nabildzr/rag-chatbot/internal/handler"
 	"github.com/nabildzr/rag-chatbot/internal/llm"
-	"github.com/nabildzr/rag-chatbot/internal/pdftext"
 	"github.com/nabildzr/rag-chatbot/internal/rag"
 	"github.com/nabildzr/rag-chatbot/internal/ratelimit"
 	"github.com/nabildzr/rag-chatbot/internal/server"
+	"github.com/nabildzr/rag-chatbot/internal/store"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
@@ -33,12 +33,17 @@ func main() {
 	// Only enable behind a reverse proxy that sets X-Forwarded-For itself.
 	trustProxy := os.Getenv("TRUST_PROXY") == "true"
 
+	files, err := store.New(getenv("DATA_DIR", "data"))
+	if err != nil {
+		log.Fatalf("DATA_DIR: %v", err)
+	}
+
 	h := handler.New(handler.Deps{
 		Embedder:   embed.New(getenv("OLLAMA_URL", "http://localhost:11434"), getenv("EMBED_MODEL", "nomic-embed-text")),
 		Vectors:    vector.New(getenv("QDRANT_URL", "http://localhost:6333"), os.Getenv("QDRANT_API_KEY")),
 		LLM:        llm.New(getenv("LLM_BASE_URL", llm.DefaultBaseURL), groqKey, getenv("GROQ_MODEL", "openai/gpt-oss-120b")),
-		ExtractPDF: extractPDF,
 		VectorSize: embed.Dimension,
+		Files:      files,
 
 		MinScore:    getenvFloat("MIN_SCORE", rag.DefaultMinScore),
 		ScoreMargin: getenvFloat("SCORE_MARGIN", rag.DefaultScoreMargin),
@@ -86,18 +91,6 @@ func limiter(key string, perMinute, burst int, trustProxy bool) *ratelimit.Limit
 		return nil
 	}
 	return ratelimit.New(perMinute, min(burst, perMinute), trustProxy)
-}
-
-func extractPDF(data []byte) ([]rag.Page, error) {
-	pages, err := pdftext.Extract(data)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]rag.Page, len(pages))
-	for i, p := range pages {
-		out[i] = rag.Page{Number: p.Number, Text: p.Text}
-	}
-	return out, nil
 }
 
 // loadDotEnv sets KEY=VALUE lines from path for local development. Variables
