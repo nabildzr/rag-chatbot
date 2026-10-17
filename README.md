@@ -6,6 +6,8 @@ di-stream token demi token dan menyertakan sitasi `[n]` yang merujuk ke halaman 
 Arsitektur hybrid: vector DB dan embedding jalan self-hosted (Docker), sedangkan LLM
 memakai API cloud yang OpenAI-compatible (default: Groq), jadi mudah diganti.
 
+![Tanya-jawab atas PDF dengan sitasi halaman sumber](docs/screenshot.png)
+
 ## Arsitektur
 
 ```
