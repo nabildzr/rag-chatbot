@@ -150,6 +150,17 @@ func matches(payload map[string]any, f *vector.Filter) bool {
 	return true
 }
 
+// funcExtractor is an Extractor with real detection and a canned result.
+type funcExtractor func(string, []byte) (*extract.Document, error)
+
+func (f funcExtractor) Detect(name string, data []byte) (extract.Kind, error) {
+	return extract.Detect(name, data)
+}
+func (f funcExtractor) Extract(_ context.Context, name string, data []byte) (*extract.Document, error) {
+	return f(name, data)
+}
+func (f funcExtractor) Extensions() []string { return extract.Extractor{}.Extensions() }
+
 func twoPages(string, []byte) (*extract.Document, error) {
 	return &extract.Document{Kind: extract.PDF, Sections: []extract.Section{
 		{Number: 1, Text: "halo dunia"},
@@ -199,7 +210,7 @@ func uploadAndWait(t *testing.T, h *Handler, filename string, content []byte) jo
 func TestIngestIndexesChunksInBackground(t *testing.T) {
 	vs := &fakeStore{}
 	files, _ := store.New(t.TempDir())
-	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extract: twoPages, Files: files})
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extractor: funcExtractor(twoPages), Files: files})
 
 	snap := uploadAndWait(t, h, "notes.pdf", []byte("%PDF-1.7 fake"))
 	if snap.Status != "done" || snap.Done != 2 || snap.Total != 2 || snap.Document == nil {
@@ -223,7 +234,7 @@ func TestIngestIndexesChunksInBackground(t *testing.T) {
 
 func TestIngestRejectsDuplicate(t *testing.T) {
 	vs := &fakeStore{}
-	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extract: twoPages})
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extractor: funcExtractor(twoPages)})
 	first := uploadAndWait(t, h, "a.pdf", []byte("%PDF-1.7 same"))
 
 	rec := upload(t, h.Routes(), "renamed.pdf", []byte("%PDF-1.7 same"))
@@ -245,7 +256,7 @@ func TestIngestRejectsUnsupported(t *testing.T) {
 
 func TestIngestEmptyTextFailsJob(t *testing.T) {
 	noText := func(string, []byte) (*extract.Document, error) { return &extract.Document{Kind: extract.PDF}, nil }
-	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: &fakeStore{}, Extract: noText})
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: &fakeStore{}, Extractor: funcExtractor(noText)})
 	snap := uploadAndWait(t, h, "scan.pdf", []byte("%PDF-1.4"))
 	if snap.Status != "error" || !strings.Contains(snap.Error, "tidak ada teks") {
 		t.Fatalf("bad job: %+v", snap)
@@ -255,7 +266,7 @@ func TestIngestEmptyTextFailsJob(t *testing.T) {
 func TestIngestCleansUpOnFailure(t *testing.T) {
 	vs := &fakeStore{upsertErr: errors.New("qdrant down")}
 	files, _ := store.New(t.TempDir())
-	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extract: twoPages, Files: files})
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extractor: funcExtractor(twoPages), Files: files})
 
 	snap := uploadAndWait(t, h, "a.pdf", []byte("%PDF-1.7"))
 	if snap.Status != "error" || strings.Contains(snap.Error, "qdrant") {

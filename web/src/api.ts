@@ -24,6 +24,7 @@ export type DocumentInfo = {
 // unitLabel names what a page number counts for a file kind.
 export function unitLabel(kind: string): string {
   if (kind === 'pptx') return 'slide'
+  if (kind === 'image') return 'gambar'
   if (kind === 'pdf' || !kind) return 'hlm'
   return 'bagian'
 }

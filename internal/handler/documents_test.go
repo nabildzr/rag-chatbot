@@ -71,7 +71,7 @@ func TestDeleteDocument(t *testing.T) {
 
 func TestIngestStoresDocFieldsAndIndexes(t *testing.T) {
 	vs := &fakeStore{}
-	uploadAndWait(t, New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extract: twoPages}), "notes.pdf", []byte("%PDF-1.7"))
+	uploadAndWait(t, New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extractor: funcExtractor(twoPages)}), "notes.pdf", []byte("%PDF-1.7"))
 
 	p := vs.snapshot()[0].Payload
 	if p["doc_pages"] != 2 || p["doc_chunks"] != 2 || p["kind"] != "pdf" {

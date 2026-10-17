@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -39,6 +40,10 @@ func decodeQuestion(w http.ResponseWriter, r *http.Request) (chatRequest, bool) 
 // candidatePool is how many chunks each index (dense, keyword) contributes
 // before the final ordering.
 const candidatePool = 20
+
+// rerankPool is how many fused candidates go to the reranker. Each costs
+// one cross-encoder pass, which is the slow part on CPU.
+const rerankPool = 10
 
 type retrieval struct {
 	Sources []rag.Source `json:"sources"`
@@ -76,35 +81,9 @@ func (h *Handler) retrieve(ctx context.Context, question, docID string, history 
 		return retrieval{}, fmt.Errorf("collection: %w", err)
 	}
 
-	var sources []rag.Source
-	minScore, margin := h.deps.MinScore, h.deps.ScoreMargin
-	if raw {
-		minScore, margin = 0, 0
-	}
-	if h.hybrid.Load() {
-		cands, err := h.hybridCandidates(ctx, question, queries, filter)
-		if err != nil {
-			return retrieval{}, err
-		}
-		sources = rag.Fuse(cands, minScore, margin, topK)
-	} else {
-		var hits []vector.ScoredPoint
-		using := ""
-		if h.named.Load() {
-			using = vector.DenseName
-		}
-		for _, q := range queries {
-			qvec, err := h.deps.Embedder.EmbedQuery(ctx, q)
-			if err != nil {
-				return retrieval{}, fmt.Errorf("embed: %w", err)
-			}
-			found, err := h.deps.Vectors.Search(ctx, h.collection, qvec, topK, filter, using)
-			if err != nil {
-				return retrieval{}, fmt.Errorf("search: %w", err)
-			}
-			hits = append(hits, found...)
-		}
-		sources = rag.SelectSources(toSources(mergeHits(hits, topK)), minScore, margin)
+	sources, err := h.rank(ctx, question, queries, filter, raw)
+	if err != nil {
+		return retrieval{}, err
 	}
 	if raw || len(sources) > 0 || docID == "" {
 		return retrieval{Sources: sources}, nil
@@ -118,6 +97,93 @@ func (h *Handler) retrieve(ctx context.Context, question, docID string, history 
 		return retrieval{}, fmt.Errorf("overview: %w", err)
 	}
 	return retrieval{Sources: sources, Overview: len(sources) > 0}, nil
+}
+
+// rank returns the final sources: reranked when a reranker is configured,
+// otherwise the first-stage ranking filtered by MinScore and ScoreMargin.
+// raw turns all score filters off.
+func (h *Handler) rank(ctx context.Context, question string, queries []string, filter *vector.Filter, raw bool) ([]rag.Source, error) {
+	minScore, margin := h.deps.MinScore, h.deps.ScoreMargin
+	if raw {
+		minScore, margin = 0, 0
+	}
+	if h.deps.Reranker != nil {
+		pool, err := h.candidates(ctx, question, queries, filter, rerankPool, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		// A follow-up ("and for overtime?") is judged with its context.
+		reranked, err := h.rerank(ctx, queries[len(queries)-1], pool, raw)
+		if err == nil {
+			return reranked, nil
+		}
+		// The reranker is an optional extra; without it retrieval still works.
+		log.Printf("rerank failed, using first-stage ranking: %v", err)
+	}
+	return h.candidates(ctx, question, queries, filter, topK, minScore, margin)
+}
+
+// candidates is the first stage: up to n chunks ordered by rank fusion
+// (hybrid collections) or cosine (dense-only), filtered by minScore/margin.
+func (h *Handler) candidates(ctx context.Context, question string, queries []string, filter *vector.Filter, n int, minScore, margin float32) ([]rag.Source, error) {
+	if h.hybrid.Load() {
+		cands, err := h.hybridCandidates(ctx, question, queries, filter)
+		if err != nil {
+			return nil, err
+		}
+		return rag.Fuse(cands, minScore, margin, n), nil
+	}
+	using := ""
+	if h.named.Load() {
+		using = vector.DenseName
+	}
+	var hits []vector.ScoredPoint
+	for _, q := range queries {
+		qvec, err := h.deps.Embedder.EmbedQuery(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("embed: %w", err)
+		}
+		found, err := h.deps.Vectors.Search(ctx, h.collection, qvec, n, filter, using)
+		if err != nil {
+			return nil, fmt.Errorf("search: %w", err)
+		}
+		hits = append(hits, found...)
+	}
+	return rag.SelectSources(toSources(mergeHits(hits, n)), minScore, margin), nil
+}
+
+// rerank scores pool with the cross-encoder, orders by that score and keeps
+// up to topK sources above RerankMinScore. Source.Score becomes the
+// reranker score.
+func (h *Handler) rerank(ctx context.Context, query string, pool []rag.Source, raw bool) ([]rag.Source, error) {
+	out := []rag.Source{}
+	if len(pool) == 0 {
+		return out, nil
+	}
+	texts := make([]string, len(pool))
+	for i, s := range pool {
+		texts[i] = s.Text
+	}
+	scores, err := h.deps.Reranker.Rerank(ctx, query, texts)
+	if err != nil {
+		return nil, err
+	}
+	for i := range pool {
+		pool[i].Score = scores[i]
+	}
+	sort.SliceStable(pool, func(i, j int) bool { return pool[i].Score > pool[j].Score })
+
+	minScore := h.deps.RerankMinScore
+	if raw {
+		minScore = 0
+	}
+	for _, s := range pool {
+		if len(out) == topK || s.Score < minScore {
+			break
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // hybridCandidates runs a dense and a keyword search for every query and

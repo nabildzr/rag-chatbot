@@ -17,8 +17,8 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api && mkdir -p /out/data
 
-# 3. Runtime: static binary + CA certificates (for the Groq HTTPS API), non-root
-FROM gcr.io/distroless/static-debian12:nonroot
+# 3a. Minimal runtime without OCR (~18 MB): docker build --target slim .
+FROM gcr.io/distroless/static-debian12:nonroot AS slim
 WORKDIR /app
 COPY --from=api /out/api /app/api
 COPY --from=web /web/dist /app/web
@@ -27,4 +27,18 @@ COPY --from=api --chown=65532:65532 /out/data /app/data
 ENV STATIC_DIR=/app/web DATA_DIR=/app/data PORT=8080
 EXPOSE 8080
 USER nonroot
+ENTRYPOINT ["/app/api"]
+
+# 3b. Default runtime with OCR for images and scanned PDFs: Tesseract
+# (Indonesian + English) and Poppler for rendering PDF pages.
+FROM alpine:3.21 AS full
+RUN apk add --no-cache ca-certificates tesseract-ocr tesseract-ocr-data-ind tesseract-ocr-data-eng poppler-utils \
+ && adduser -D -H -u 65532 nonroot
+WORKDIR /app
+COPY --from=api /out/api /app/api
+COPY --from=web /web/dist /app/web
+COPY --from=api --chown=65532:65532 /out/data /app/data
+ENV STATIC_DIR=/app/web DATA_DIR=/app/data PORT=8080
+EXPOSE 8080
+USER 65532
 ENTRYPOINT ["/app/api"]

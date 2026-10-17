@@ -64,3 +64,24 @@ A first attempt that only used BM25 to add candidates and then re-ranked
 everything by cosine scored exactly like dense-only: on a corpus this small the
 dense top 20 already contains every chunk, so keywords must influence the
 ordering and the threshold, not only the candidate set.
+
+## 4. Reranking (optional, off by default)
+
+Same data as section 3, plus the documents uploaded during development as extra
+distractors. The reranker re-scores the 10 best fused candidates.
+
+| configuration | in-scope hit@1 | MRR | off-topic rejected | time per question (CPU) |
+|---|---|---|---|---|
+| hybrid, no reranker | **98%** | **0.99** | 60% | ~0.2 s |
+| + mmarco-mMiniLMv2-L12 (118M) | 90% | 0.95 | (needs tuning) | ~1.5 s |
+| + bge-reranker-v2-m3 (568M) | not finished | | | ~60 s |
+
+On a CPU-only machine reranking does not pay off here: the small multilingual
+cross-encoder ranks worse than hybrid search (it scored one correct chunk 0.009),
+and bge-reranker-v2-m3 is far too slow. Reranking is therefore opt-in
+(`RERANK_URL`) and meant for a GPU host.
+
+Run evaluations against a separate collection so test documents do not end up
+next to real ones, e.g. start a second API with
+`COLLECTION=eval PORT=18080 CHAT_RATE_PER_MIN=0 INGEST_RATE_PER_MIN=0` and pass
+`-api http://localhost:18080`.

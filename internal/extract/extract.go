@@ -5,6 +5,7 @@ package extract
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -17,11 +18,12 @@ import (
 type Kind string
 
 const (
-	PDF  Kind = "pdf"
-	DOCX Kind = "docx"
-	PPTX Kind = "pptx"
-	TXT  Kind = "txt"
-	MD   Kind = "md"
+	PDF   Kind = "pdf"
+	DOCX  Kind = "docx"
+	PPTX  Kind = "pptx"
+	TXT   Kind = "txt"
+	MD    Kind = "md"
+	Image Kind = "image" // PNG or JPEG, read with OCR
 )
 
 // Unit names what a section number refers to, for citations.
@@ -31,15 +33,14 @@ func (k Kind) Unit() string {
 		return "page"
 	case PPTX:
 		return "slide"
+	case Image:
+		return "image"
 	default:
 		return "section"
 	}
 }
 
-// Extensions accepted by the upload form.
-var Extensions = []string{".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown"}
-
-var ErrUnsupported = errors.New("format tidak didukung (PDF, DOCX, PPTX, TXT, MD)")
+var ErrUnsupported = errors.New("format tidak didukung")
 
 // Section is a citable unit: a PDF page, a slide, or a part of a text
 // document split at headings.
@@ -54,21 +55,52 @@ type Document struct {
 	Sections []Section
 }
 
+// OCR reads text from images; see package ocr.
+type OCR interface {
+	Image(ctx context.Context, data []byte) (string, error)
+	PDFPage(ctx context.Context, pdf []byte, page int) (string, error)
+	CanReadPDF() bool
+}
+
+// Extractor turns uploads into sections. With OCR set it also accepts
+// images and reads PDF pages that have no text layer.
+type Extractor struct {
+	OCR         OCR
+	MaxOCRPages int // per PDF; 0 means 50
+}
+
+// Extensions lists the file types the upload form accepts.
+func (e Extractor) Extensions() []string {
+	ext := []string{".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown"}
+	if e.OCR != nil {
+		ext = append(ext, ".png", ".jpg", ".jpeg")
+	}
+	return ext
+}
+
+func (e Extractor) unsupported() error {
+	names := "PDF, DOCX, PPTX, TXT, MD"
+	if e.OCR != nil {
+		names += ", PNG, JPG"
+	}
+	return fmt.Errorf("%w (%s)", ErrUnsupported, names)
+}
+
 // Extract detects the format of data and returns its non-empty sections.
-func Extract(filename string, data []byte) (*Document, error) {
-	kind, err := Detect(filename, data)
+func (e Extractor) Extract(ctx context.Context, filename string, data []byte) (*Document, error) {
+	kind, err := e.Detect(filename, data)
 	if err != nil {
 		return nil, err
 	}
 	var sections []Section
 	switch kind {
 	case PDF:
-		pages, err := pdftext.Extract(data)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range pages {
-			sections = append(sections, Section{Number: p.Number, Text: p.Text})
+		sections, err = e.extractPDF(ctx, data)
+	case Image:
+		var text string
+		text, err = e.OCR.Image(ctx, data)
+		if text = strings.TrimSpace(text); text != "" {
+			sections = []Section{{Number: 1, Text: text}}
 		}
 	case DOCX:
 		sections, err = extractDOCX(data)
@@ -85,18 +117,55 @@ func Extract(filename string, data []byte) (*Document, error) {
 	return &Document{Kind: kind, Sections: sections}, nil
 }
 
+// extractPDF uses the text layer, and OCR for pages that have none (scans)
+// when OCR is available.
+func (e Extractor) extractPDF(ctx context.Context, data []byte) ([]Section, error) {
+	pages, err := pdftext.ExtractAll(data)
+	if err != nil {
+		return nil, err
+	}
+	limit := e.MaxOCRPages
+	if limit == 0 {
+		limit = 50
+	}
+	canOCR := e.OCR != nil && e.OCR.CanReadPDF()
+	var sections []Section
+	ocred := 0
+	for _, p := range pages {
+		text := p.Text
+		// A handful of characters (page numbers, stray marks) is not a text layer.
+		if canOCR && len(strings.Fields(text)) < 5 && ocred < limit {
+			ocred++
+			t, err := e.OCR.PDFPage(ctx, data, p.Number)
+			if err != nil {
+				return nil, fmt.Errorf("ocr page %d: %w", p.Number, err)
+			}
+			text = t
+		}
+		if text = strings.TrimSpace(text); text != "" {
+			sections = append(sections, Section{Number: p.Number, Text: text})
+		}
+	}
+	return sections, nil
+}
+
 // Detect identifies the format from magic bytes, falling back to the
 // extension for plain text.
-func Detect(filename string, data []byte) (Kind, error) {
+func (e Extractor) Detect(filename string, data []byte) (Kind, error) {
 	switch {
 	case bytes.HasPrefix(data, []byte("%PDF-")):
 		return PDF, nil
-	case bytes.HasPrefix(data, []byte("PK\x03\x04")):
+	case bytes.HasPrefix(data, []byte{'P', 'K', 3, 4}):
 		return detectOOXML(data)
+	case bytes.HasPrefix(data, []byte{0x89, 'P', 'N', 'G'}), bytes.HasPrefix(data, []byte{0xff, 0xd8, 0xff}):
+		if e.OCR == nil {
+			return "", fmt.Errorf("gambar butuh OCR, yang belum aktif di server: %w", ErrUnsupported)
+		}
+		return Image, nil
 	}
 	ext := strings.ToLower(filepath.Ext(filename))
 	if ext != ".txt" && ext != ".md" && ext != ".markdown" {
-		return "", ErrUnsupported
+		return "", e.unsupported()
 	}
 	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
 		return "", fmt.Errorf("file teks harus UTF-8: %w", ErrUnsupported)
@@ -106,6 +175,13 @@ func Detect(filename string, data []byte) (Kind, error) {
 	}
 	return MD, nil
 }
+
+// Extract and Detect without OCR, for callers that do not need it.
+func Extract(filename string, data []byte) (*Document, error) {
+	return Extractor{}.Extract(context.Background(), filename, data)
+}
+
+func Detect(filename string, data []byte) (Kind, error) { return Extractor{}.Detect(filename, data) }
 
 func decodeText(data []byte) string {
 	s := strings.TrimPrefix(string(data), "FEFF")

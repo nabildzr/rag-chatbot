@@ -21,6 +21,24 @@ services:
     volumes:
       - ollama_data:/root/.ollama
 
+  # Optional cross-encoder reranker. Start with --profile rerank and set
+  # RERANK_URL (http://localhost:8081 in development, http://reranker for the app).
+  # Measured on the eval set (eval/RESULTS.md): on CPU bge-reranker-v2-m3 takes
+  # about 60 s per question, so only enable it on a GPU host (use the matching
+  # cuda image tag). Smaller CPU-friendly rerankers scored worse than hybrid
+  # search alone.
+  reranker:
+    profiles: ["rerank"]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    # Smaller batches keep CPU warm-up and memory reasonable; passages are
+    # chunk-sized, so truncating at 1024 tokens loses nothing.
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--max-batch-tokens", "4096", "--auto-truncate"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      - reranker_data:/data
+
   app:
     profiles: ["prod"]
     build: .
@@ -42,3 +60,4 @@ volumes:
   qdrant_data:
   ollama_data:
   app_data:
+  reranker_data:

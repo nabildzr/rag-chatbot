@@ -3,7 +3,9 @@ package extract
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -129,5 +131,79 @@ func TestDetectRejectsUnknown(t *testing.T) {
 func TestDetectUsesContentNotName(t *testing.T) {
 	if k, _ := Detect("renamed.txt", []byte("%PDF-1.7")); k != PDF {
 		t.Fatalf("got %s", k)
+	}
+}
+
+type fakeOCR struct{ pages []int }
+
+func (o *fakeOCR) Image(context.Context, []byte) (string, error) { return "teks dari foto struk", nil }
+func (o *fakeOCR) PDFPage(_ context.Context, _ []byte, page int) (string, error) {
+	o.pages = append(o.pages, page)
+	return fmt.Sprintf("hasil OCR halaman %d", page), nil
+}
+func (o *fakeOCR) CanReadPDF() bool { return true }
+
+// pdfWithPages builds a PDF where an empty string means a page without text.
+func pdfWithPages(texts ...string) []byte {
+	var objs []string
+	kids := make([]string, len(texts))
+	for i := range texts {
+		kids[i] = fmt.Sprintf("%d 0 R", 4+2*i)
+	}
+	objs = append(objs, "<< /Type /Catalog /Pages 2 0 R >>",
+		fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(texts)),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+	for i, t := range texts {
+		stream := ""
+		if t != "" {
+			stream = fmt.Sprintf("BT /F1 12 Tf 72 720 Td (%s) Tj ET", t)
+		}
+		objs = append(objs,
+			fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>", 5+2*i),
+			fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(stream), stream))
+	}
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objs))
+	for i, o := range objs {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
+	return b.Bytes()
+}
+
+func TestOCRReadsScannedPagesOnly(t *testing.T) {
+	ocr := &fakeOCR{}
+	doc, err := Extractor{OCR: ocr}.Extract(context.Background(), "scan.pdf",
+		pdfWithPages("Halaman pertama punya lapisan teks yang cukup panjang", "", "Halaman ketiga juga punya teks yang cukup panjang"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ocr.pages) != 1 || ocr.pages[0] != 2 {
+		t.Fatalf("OCR should run on page 2 only, ran on %v", ocr.pages)
+	}
+	if len(doc.Sections) != 3 || doc.Sections[1].Text != "hasil OCR halaman 2" {
+		t.Fatalf("got %+v", doc.Sections)
+	}
+}
+
+func TestImagesNeedOCR(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a}
+	if _, err := (Extractor{}).Detect("struk.png", png); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("without OCR: %v", err)
+	}
+	e := Extractor{OCR: &fakeOCR{}}
+	doc, err := e.Extract(context.Background(), "struk.png", png)
+	if err != nil || doc.Kind != Image || doc.Kind.Unit() != "image" || doc.Sections[0].Text != "teks dari foto struk" {
+		t.Fatalf("with OCR: %+v %v", doc, err)
+	}
+	if !strings.Contains(strings.Join(e.Extensions(), ","), ".png") {
+		t.Fatal("png should be listed with OCR")
 	}
 }

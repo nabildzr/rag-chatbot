@@ -16,9 +16,25 @@ type Page struct {
 	Text   string
 }
 
-// Extract returns the text of every non-empty page. Scanned PDFs without a
-// text layer yield no pages; OCR is out of scope.
-func Extract(data []byte) (pages []Page, err error) {
+// Extract returns the text of every non-empty page. Scanned pages without a
+// text layer are left out; see ExtractAll.
+func Extract(data []byte) ([]Page, error) {
+	all, err := ExtractAll(data)
+	if err != nil {
+		return nil, err
+	}
+	pages := all[:0]
+	for _, p := range all {
+		if p.Text != "" {
+			pages = append(pages, p)
+		}
+	}
+	return pages, nil
+}
+
+// ExtractAll returns every page, with empty Text for pages that have no text
+// layer (scans), so callers can OCR them.
+func ExtractAll(data []byte) (pages []Page, err error) {
 	// The parser panics on some malformed files; turn that into an error.
 	defer func() {
 		if r := recover(); r != nil {
@@ -34,11 +50,10 @@ func Extract(data []byte) (pages []Page, err error) {
 	for i := 1; i <= r.NumPage(); i++ {
 		p := r.Page(i)
 		if p.V.IsNull() {
+			pages = append(pages, Page{Number: i})
 			continue
 		}
-		if text := assemble(p.Content().Text); text != "" {
-			pages = append(pages, Page{Number: i, Text: text})
-		}
+		pages = append(pages, Page{Number: i, Text: assemble(p.Content().Text)})
 	}
 	return pages, nil
 }

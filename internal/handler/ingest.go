@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/nabildzr/rag-chatbot/internal/extract"
 	"github.com/nabildzr/rag-chatbot/internal/rag"
 	"github.com/nabildzr/rag-chatbot/internal/sparse"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
@@ -54,7 +53,7 @@ func (h *Handler) ingest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filename := filepath.Base(header.Filename)
-	if _, err := extract.Detect(filename, data); err != nil {
+	if _, err := h.deps.Extractor.Detect(filename, data); err != nil {
 		writeError(w, http.StatusUnsupportedMediaType, err.Error())
 		return
 	}
@@ -122,7 +121,7 @@ func (h *Handler) runIngest(j *job, data []byte) {
 
 func (h *Handler) index(ctx context.Context, j *job, data []byte) (*document, error) {
 	h.jobs.update(j, "extracting", 0, 0)
-	doc, err := h.deps.Extract(j.Filename, data)
+	doc, err := h.deps.Extractor.Extract(ctx, j.Filename, data)
 	if err != nil {
 		return nil, userError{err}
 	}

@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/nabildzr/rag-chatbot/internal/embed"
+	"github.com/nabildzr/rag-chatbot/internal/extract"
 	"github.com/nabildzr/rag-chatbot/internal/handler"
 	"github.com/nabildzr/rag-chatbot/internal/llm"
+	"github.com/nabildzr/rag-chatbot/internal/ocr"
 	"github.com/nabildzr/rag-chatbot/internal/rag"
 	"github.com/nabildzr/rag-chatbot/internal/ratelimit"
+	"github.com/nabildzr/rag-chatbot/internal/rerank"
 	"github.com/nabildzr/rag-chatbot/internal/server"
 	"github.com/nabildzr/rag-chatbot/internal/store"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
@@ -39,13 +42,35 @@ func main() {
 	}
 
 	embedModel := getenv("EMBED_MODEL", embed.DefaultModel)
+	// Set below only when configured: a nil *rerank.Client must not end up
+	// as a non-nil handler.Reranker interface.
+	var reranker handler.Reranker
+	if u := os.Getenv("RERANK_URL"); u != "" {
+		reranker = rerank.New(u)
+		log.Printf("reranking with %s", u)
+	}
+	// OCR is enabled when Tesseract is installed (the Docker image has it).
+	var extractor extract.Extractor
+	if os.Getenv("OCR") != "off" {
+		if t, err := ocr.Find(getenv("OCR_LANGS", "ind+eng")); err == nil {
+			extractor.OCR = t
+			log.Printf("OCR enabled (scanned PDFs: %v)", t.CanReadPDF())
+		} else {
+			log.Printf("OCR disabled: %v", err)
+		}
+	}
+
 	h := handler.New(handler.Deps{
+		Reranker:   reranker,
+		Extractor:  extractor,
 		Embedder:   embed.New(getenv("OLLAMA_URL", "http://localhost:11434"), embedModel),
 		Collection: getenv("COLLECTION", embed.CollectionName(embedModel)),
 		DenseOnly:  os.Getenv("HYBRID_SEARCH") == "false",
-		Vectors:    vector.New(getenv("QDRANT_URL", "http://localhost:6333"), os.Getenv("QDRANT_API_KEY")),
-		LLM:        llm.New(getenv("LLM_BASE_URL", llm.DefaultBaseURL), groqKey, getenv("GROQ_MODEL", "openai/gpt-oss-120b")),
-		Files:      files,
+
+		RerankMinScore: getenvFloat("RERANK_MIN_SCORE", defaultRerankMinScore),
+		Vectors:        vector.New(getenv("QDRANT_URL", "http://localhost:6333"), os.Getenv("QDRANT_API_KEY")),
+		LLM:            llm.New(getenv("LLM_BASE_URL", llm.DefaultBaseURL), groqKey, getenv("GROQ_MODEL", "openai/gpt-oss-120b")),
+		Files:          files,
 
 		MinScore:    getenvFloat("MIN_SCORE", rag.DefaultMinScore),
 		ScoreMargin: getenvFloat("SCORE_MARGIN", rag.DefaultScoreMargin),
@@ -75,6 +100,9 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
+// defaultRerankMinScore is tuned with cmd/eval -tune for bge-reranker-v2-m3.
+const defaultRerankMinScore = 0.1
 
 // staticDirSet reports production mode (the API serves the frontend).
 func staticDirSet() bool { return os.Getenv("STATIC_DIR") != "" }

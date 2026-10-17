@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -62,5 +63,59 @@ func TestHybridKeepsExactKeywordMatchBelowThreshold(t *testing.T) {
 	}
 	if store.usedVector != vector.DenseName {
 		t.Fatalf("dense search on a hybrid collection must name the vector, got %q", store.usedVector)
+	}
+}
+
+type fakeReranker struct {
+	scores map[string]float32 // by passage text
+	err    error
+}
+
+func (r fakeReranker) Rerank(_ context.Context, _ string, texts []string) ([]float32, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	out := make([]float32, len(texts))
+	for i, t := range texts {
+		out[i] = r.scores[t]
+	}
+	return out, nil
+}
+
+func searchFiles(t *testing.T, h *Handler, question string) []string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/search", strings.NewReader(`{"question":"`+question+`"}`)))
+	var res retrieval
+	json.NewDecoder(rec.Body).Decode(&res)
+	var files []string
+	for _, s := range res.Sources {
+		files = append(files, s.Filename)
+	}
+	return files
+}
+
+func TestRerankerReordersAndFilters(t *testing.T) {
+	store := &hybridStore{fakeStore: fakeStore{exists: true}, dense: []vector.ScoredPoint{
+		point("a", "first-by-cosine.md", "A", 0.80, nil),
+		point("b", "really-relevant.md", "B", 0.70, nil),
+		point("c", "irrelevant.md", "C", 0.69, nil),
+	}}
+	rr := fakeReranker{scores: map[string]float32{"A": 0.30, "B": 0.95, "C": 0.01}}
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: store, Reranker: rr, RerankMinScore: 0.2, MinScore: 0.45})
+
+	got := searchFiles(t, h, "pertanyaan")
+	if len(got) != 2 || got[0] != "really-relevant.md" || got[1] != "first-by-cosine.md" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestRerankerFailureFallsBack(t *testing.T) {
+	store := &hybridStore{fakeStore: fakeStore{exists: true}, dense: []vector.ScoredPoint{
+		point("a", "doc.md", "A", 0.80, nil),
+	}}
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: store, Reranker: fakeReranker{err: errors.New("down")}, MinScore: 0.45})
+	if got := searchFiles(t, h, "pertanyaan"); len(got) != 1 || got[0] != "doc.md" {
+		t.Fatalf("got %v", got)
 	}
 }

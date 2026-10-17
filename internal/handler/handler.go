@@ -39,23 +39,37 @@ type VectorStore interface {
 	DeleteByFilter(ctx context.Context, collection string, filter *vector.Filter) error
 }
 
+// Reranker scores passages against a question; higher is more relevant.
+type Reranker interface {
+	Rerank(ctx context.Context, query string, texts []string) ([]float32, error)
+}
+
 type LLM interface {
 	Stream(ctx context.Context, messages []llm.Message, onToken func(string) error) error
 }
 
-// ExtractFunc turns an uploaded file into text sections.
-type ExtractFunc func(filename string, data []byte) (*extract.Document, error)
+// Extractor turns uploaded files into text sections; see extract.Extractor.
+type Extractor interface {
+	Detect(filename string, data []byte) (extract.Kind, error)
+	Extract(ctx context.Context, filename string, data []byte) (*extract.Document, error)
+	Extensions() []string
+}
 
 type Deps struct {
-	Embedder Embedder
-	Vectors  VectorStore
-	LLM      LLM
-	Extract  ExtractFunc // nil: extract.Extract
+	Embedder  Embedder
+	Vectors   VectorStore
+	LLM       LLM
+	Extractor Extractor // nil: extract.Extractor without OCR
 
 	// Collection holds the chunks of every document; document_id in the
 	// payload tells them apart. Name it after the embedding model: vectors
 	// from different models cannot share one.
 	Collection string
+
+	// Reranker, when set, re-orders the best candidates with a cross-encoder
+	// and RerankMinScore replaces MinScore/ScoreMargin as the filter.
+	Reranker       Reranker
+	RerankMinScore float32
 
 	// DenseOnly turns off keyword (BM25) candidates even when the collection
 	// has them, e.g. to compare retrieval quality.
@@ -88,8 +102,8 @@ type Handler struct {
 }
 
 func New(deps Deps) *Handler {
-	if deps.Extract == nil {
-		deps.Extract = extract.Extract
+	if deps.Extractor == nil {
+		deps.Extractor = extract.Extractor{}
 	}
 	coll := deps.Collection
 	if coll == "" {
@@ -120,7 +134,7 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"admin_required": h.deps.AdminToken != "",
-		"extensions":     extract.Extensions,
+		"extensions":     h.deps.Extractor.Extensions(),
 		"max_upload_mb":  maxUploadBytes >> 20,
 	})
 }

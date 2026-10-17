@@ -9,7 +9,7 @@ import (
 
 func TestAdminTokenGuardsMutations(t *testing.T) {
 	store := &fakeStore{exists: true}
-	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: store, Extract: twoPages, AdminToken: "s3cret"}).Routes()
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: store, Extractor: funcExtractor(twoPages), AdminToken: "s3cret"}).Routes()
 
 	do := func(method, path, auth string) int {
 		req := httptest.NewRequest(method, path, strings.NewReader(""))
