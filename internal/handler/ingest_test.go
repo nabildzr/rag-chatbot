@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rag-chatbot/rag-chatbot/internal/rag"
-	"github.com/rag-chatbot/rag-chatbot/internal/vector"
+	"github.com/nabildzr/rag-chatbot/internal/rag"
+	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
 type fakeEmbedder struct{}

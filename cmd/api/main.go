@@ -8,12 +8,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rag-chatbot/rag-chatbot/internal/embed"
-	"github.com/rag-chatbot/rag-chatbot/internal/handler"
-	"github.com/rag-chatbot/rag-chatbot/internal/llm"
-	"github.com/rag-chatbot/rag-chatbot/internal/pdftext"
-	"github.com/rag-chatbot/rag-chatbot/internal/rag"
-	"github.com/rag-chatbot/rag-chatbot/internal/vector"
+	"github.com/nabildzr/rag-chatbot/internal/embed"
+	"github.com/nabildzr/rag-chatbot/internal/handler"
+	"github.com/nabildzr/rag-chatbot/internal/llm"
+	"github.com/nabildzr/rag-chatbot/internal/pdftext"
+	"github.com/nabildzr/rag-chatbot/internal/rag"
+	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
 func main() {

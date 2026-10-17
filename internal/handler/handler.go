@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"github.com/rag-chatbot/rag-chatbot/internal/llm"
-	"github.com/rag-chatbot/rag-chatbot/internal/rag"
-	"github.com/rag-chatbot/rag-chatbot/internal/vector"
+	"github.com/nabildzr/rag-chatbot/internal/llm"
+	"github.com/nabildzr/rag-chatbot/internal/rag"
+	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
 // Collection holds the chunks of every document; document_id in the payload

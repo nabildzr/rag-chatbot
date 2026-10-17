@@ -8,9 +8,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/rag-chatbot/rag-chatbot/internal/llm"
-	"github.com/rag-chatbot/rag-chatbot/internal/rag"
-	"github.com/rag-chatbot/rag-chatbot/internal/vector"
+	"github.com/nabildzr/rag-chatbot/internal/llm"
+	"github.com/nabildzr/rag-chatbot/internal/rag"
+	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
 const (

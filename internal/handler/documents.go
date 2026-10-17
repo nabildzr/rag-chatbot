@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/rag-chatbot/rag-chatbot/internal/vector"
+	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
 type document struct {

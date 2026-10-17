@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/rag-chatbot/rag-chatbot/internal/vector"
+	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
 func chunkPoint(docID, filename, createdAt string, index, pages, chunks int) vector.Point {

@@ -1,4 +1,4 @@
-module github.com/rag-chatbot/rag-chatbot
+module github.com/nabildzr/rag-chatbot
 
 go 1.27.0
 

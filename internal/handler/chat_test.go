@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rag-chatbot/rag-chatbot/internal/llm"
-	"github.com/rag-chatbot/rag-chatbot/internal/vector"
+	"github.com/nabildzr/rag-chatbot/internal/llm"
+	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
 type searchStore struct {
