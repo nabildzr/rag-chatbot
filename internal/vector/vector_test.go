@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"testing"
+
+	"github.com/nabildzr/rag-chatbot/internal/sparse"
 )
 
 func TestEnsureCollectionCreatesWhenMissing(t *testing.T) {
@@ -27,8 +29,9 @@ func TestEnsureCollectionCreatesWhenMissing(t *testing.T) {
 	if err := New(srv.URL, "").EnsureCollection(context.Background(), "docs", 768); err != nil {
 		t.Fatal(err)
 	}
-	vectors := created["vectors"].(map[string]any)
-	if vectors["size"].(float64) != 768 || vectors["distance"] != "Cosine" {
+	dense := created["vectors"].(map[string]any)["dense"].(map[string]any)
+	bm25 := created["sparse_vectors"].(map[string]any)["bm25"].(map[string]any)
+	if dense["size"].(float64) != 768 || dense["distance"] != "Cosine" || bm25["modifier"] != "idf" {
 		t.Fatalf("bad create body: %v", created)
 	}
 }
@@ -65,7 +68,7 @@ func TestUpsertAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hits, err := c.Search(ctx, "docs", []float32{0.1, 0.2}, 5, MatchField("document_id", "d1"))
+	hits, err := c.Search(ctx, "docs", []float32{0.1, 0.2}, 5, MatchField("document_id", "d1"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +83,7 @@ func TestErrorStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL, "").Search(context.Background(), "x", []float32{1}, 1, nil); err == nil {
+	if _, err := New(srv.URL, "").Search(context.Background(), "x", []float32{1}, 1, nil, ""); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -88,5 +91,53 @@ func TestErrorStatus(t *testing.T) {
 func TestNewIDIsUUIDv4(t *testing.T) {
 	if id := NewID(); !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(id) {
 		t.Fatalf("not a UUIDv4: %s", id)
+	}
+}
+
+func TestPointJSONLayouts(t *testing.T) {
+	legacy, _ := json.Marshal(Point{ID: "a", Vector: []float32{1, 2}})
+	if string(legacy) != `{"id":"a","vector":[1,2]}` {
+		t.Fatalf("legacy: %s", legacy)
+	}
+	hybrid, _ := json.Marshal(Point{ID: "b", Vector: []float32{1}, Sparse: &sparse.Vector{Indices: []uint32{7}, Values: []float32{0.5}}})
+	if string(hybrid) != `{"id":"b","vector":{"bm25":{"indices":[7],"values":[0.5]},"dense":[1]}}` {
+		t.Fatalf("hybrid: %s", hybrid)
+	}
+	var back Point
+	if err := json.Unmarshal(hybrid, &back); err != nil || back.Sparse == nil || back.Vector[0] != 1 {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+}
+
+func TestSparseSearchReturnsDenseVectors(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/collections/docs":
+			w.Write([]byte(`{"result":{"config":{"params":{"sparse_vectors":{"bm25":{"modifier":"idf"}}}}}}`))
+		case "/collections/docs/points/query":
+			body = nil
+			json.NewDecoder(r.Body).Decode(&body)
+			w.Write([]byte(`{"result":{"points":[{"id":"x","score":3.2,"payload":{"text":"t"},"vector":{"dense":[0.6,0.8]}}]}}`))
+		}
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "")
+
+	if ok, err := c.Hybrid(context.Background(), "docs"); !ok || err != nil {
+		t.Fatalf("hybrid detection: %v %v", ok, err)
+	}
+	hits, err := c.SparseSearch(context.Background(), "docs", sparse.Query("readyz endpoint"), 20, MatchField("document_id", "d1"))
+	if err != nil || len(hits) != 1 || len(hits[0].Dense) != 2 || hits[0].Dense[1] != 0.8 {
+		t.Fatalf("hits %+v err %v", hits, err)
+	}
+	if body["using"] != "bm25" || body["filter"] == nil || body["with_vector"].([]any)[0] != "dense" {
+		t.Fatalf("bad body: %v", body)
+	}
+
+	// Only stop words: no request at all.
+	body = nil
+	if hits, _ := c.SparseSearch(context.Background(), "docs", sparse.Query("apa itu"), 20, nil); hits != nil || body != nil {
+		t.Fatalf("stop-word query should not search: %v %v", hits, body)
 	}
 }

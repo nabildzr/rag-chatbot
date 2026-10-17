@@ -40,3 +40,27 @@ Threshold from `-tune`: the expected chunk always scored ≥ 0.482, the best
 off-topic chunk ≤ 0.475. 0.45 sits below that gap on purpose (favouring
 recall), so one off-topic question still returns a weak source; the model then
 answers that it found nothing.
+
+## 3. bge-m3 + hybrid search (dense + BM25, RRF)
+
+Ten **keyword** questions were added: short queries that are an exact term from
+the text (`/readyz`, `OOMKilled`, `QRIS`, `Rp3.500`, `Mendut`, ...). Same data,
+dense-only (`HYBRID_SEARCH=false`) vs hybrid:
+
+| type | n | dense hit@1 | hybrid hit@1 | dense MRR | hybrid MRR |
+|---|---|---|---|---|---|
+| same | 17 | 100% | 100% | 1.00 | 1.00 |
+| cross | 15 | 93% | 93% | 0.97 | 0.97 |
+| keyword | 10 | 80% | **100%** | 0.83 | **1.00** |
+| **in-scope total** | 42 | 93% | **98%** | 0.95 | **0.99** |
+| offtopic (no sources) | 5 | 80% | 80% | | |
+
+Dense-only missed `Mendut` entirely (its cosine was below `MIN_SCORE`) and ranked
+`Rp3.500` third. Hybrid orders candidates by reciprocal rank fusion of the dense
+and BM25 rankings, and keeps a chunk that contains every keyword of the
+question even when its cosine is under the threshold.
+
+A first attempt that only used BM25 to add candidates and then re-ranked
+everything by cosine scored exactly like dense-only: on a corpus this small the
+dense top 20 already contains every chunk, so keywords must influence the
+ordering and the threshold, not only the candidate set.

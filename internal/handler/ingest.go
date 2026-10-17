@@ -13,6 +13,7 @@ import (
 
 	"github.com/nabildzr/rag-chatbot/internal/extract"
 	"github.com/nabildzr/rag-chatbot/internal/rag"
+	"github.com/nabildzr/rag-chatbot/internal/sparse"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
@@ -153,9 +154,15 @@ func (h *Handler) index(ctx context.Context, j *job, data []byte) (*document, er
 
 		points := make([]vector.Point, len(batch))
 		for i, c := range batch {
+			var kw *sparse.Vector
+			if h.named.Load() { // the layout needs both vectors, even when keyword search is off
+				v := sparse.Document(c.Text)
+				kw = &v
+			}
 			points[i] = vector.Point{
 				ID:     vector.NewID(),
 				Vector: vecs[i],
+				Sparse: kw,
 				Payload: map[string]any{
 					"document_id":   j.DocumentID,
 					"filename":      j.Filename,

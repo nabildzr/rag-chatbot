@@ -81,8 +81,14 @@ func main() {
 		for _, id := range created {
 			req, _ := http.NewRequest(http.MethodDelete, *api+"/documents/"+id, nil)
 			authorize(req)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				log.Printf("cleanup %s: %v", id, err)
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				log.Printf("cleanup %s: status %d", id, resp.StatusCode)
 			}
 		}
 	}()

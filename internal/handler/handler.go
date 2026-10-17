@@ -12,6 +12,7 @@ import (
 	"github.com/nabildzr/rag-chatbot/internal/extract"
 	"github.com/nabildzr/rag-chatbot/internal/llm"
 	"github.com/nabildzr/rag-chatbot/internal/ratelimit"
+	"github.com/nabildzr/rag-chatbot/internal/sparse"
 	"github.com/nabildzr/rag-chatbot/internal/store"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
@@ -31,7 +32,9 @@ type VectorStore interface {
 	CreatePayloadIndex(ctx context.Context, collection, field, schema string) error
 	Scroll(ctx context.Context, collection string, filter *vector.Filter, limit int, offset any) ([]vector.Record, any, error)
 	Upsert(ctx context.Context, collection string, points []vector.Point) error
-	Search(ctx context.Context, collection string, v []float32, limit int, filter *vector.Filter) ([]vector.ScoredPoint, error)
+	Search(ctx context.Context, collection string, v []float32, limit int, filter *vector.Filter, using string) ([]vector.ScoredPoint, error)
+	Hybrid(ctx context.Context, collection string) (bool, error)
+	SparseSearch(ctx context.Context, collection string, kw sparse.Vector, limit int, filter *vector.Filter) ([]vector.ScoredPoint, error)
 	SetPayload(ctx context.Context, collection string, payload map[string]any, filter *vector.Filter) error
 	DeleteByFilter(ctx context.Context, collection string, filter *vector.Filter) error
 }
@@ -54,6 +57,10 @@ type Deps struct {
 	// from different models cannot share one.
 	Collection string
 
+	// DenseOnly turns off keyword (BM25) candidates even when the collection
+	// has them, e.g. to compare retrieval quality.
+	DenseOnly bool
+
 	// Files keeps original uploads for download and re-indexing; nil skips it.
 	Files *store.Files
 
@@ -73,7 +80,9 @@ type Deps struct {
 type Handler struct {
 	deps       Deps
 	collection string
-	indexed    atomic.Bool // payload indexes created
+	indexed    atomic.Bool // payload indexes created and layout detected
+	named      atomic.Bool // hybrid layout: named dense vector + BM25 sparse vector
+	hybrid     atomic.Bool // named, and keyword candidates are enabled
 	jobs       jobList
 	ingestSlot chan struct{} // one background ingest at a time
 }

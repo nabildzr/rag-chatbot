@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nabildzr/rag-chatbot/internal/extract"
+	"github.com/nabildzr/rag-chatbot/internal/sparse"
 	"github.com/nabildzr/rag-chatbot/internal/store"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
@@ -76,8 +77,15 @@ func (s *fakeStore) Upsert(_ context.Context, _ string, p []vector.Point) error 
 	return nil
 }
 
-func (s *fakeStore) Search(context.Context, string, []float32, int, *vector.Filter) ([]vector.ScoredPoint, error) {
+func (s *fakeStore) Search(context.Context, string, []float32, int, *vector.Filter, string) ([]vector.ScoredPoint, error) {
 	return nil, nil
+}
+
+// The fake behaves like a collection created before hybrid search.
+func (s *fakeStore) Hybrid(context.Context, string) (bool, error) { return false, nil }
+
+func (s *fakeStore) SparseSearch(context.Context, string, sparse.Vector, int, *vector.Filter) ([]vector.ScoredPoint, error) {
+	return nil, errors.New("not hybrid")
 }
 
 func (s *fakeStore) Scroll(_ context.Context, _ string, f *vector.Filter, limit int, _ any) ([]vector.Record, any, error) {

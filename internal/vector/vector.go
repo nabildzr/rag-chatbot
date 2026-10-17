@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/nabildzr/rag-chatbot/internal/sparse"
 )
 
 type Client struct {
@@ -30,16 +32,79 @@ func New(baseURL, apiKey string) *Client {
 	}
 }
 
+// Names of the vectors in a hybrid collection.
+const (
+	DenseName  = "dense"
+	SparseName = "bm25"
+)
+
 type Point struct {
-	ID      string         `json:"id"` // UUID; see NewID
-	Vector  []float32      `json:"vector"`
-	Payload map[string]any `json:"payload,omitempty"`
+	ID      string         // UUID; see NewID
+	Vector  []float32      // dense embedding
+	Sparse  *sparse.Vector // keyword vector; set only for hybrid collections
+	Payload map[string]any
+}
+
+// MarshalJSON writes the unnamed dense vector of a legacy collection, or the
+// named dense + sparse pair of a hybrid one.
+func (p Point) MarshalJSON() ([]byte, error) {
+	var vec any = p.Vector
+	if p.Sparse != nil {
+		vec = map[string]any{DenseName: p.Vector, SparseName: p.Sparse}
+	}
+	return json.Marshal(struct {
+		ID      string         `json:"id"`
+		Vector  any            `json:"vector"`
+		Payload map[string]any `json:"payload,omitempty"`
+	}{p.ID, vec, p.Payload})
+}
+
+func (p *Point) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		ID      string          `json:"id"`
+		Vector  json.RawMessage `json:"vector"`
+		Payload map[string]any  `json:"payload"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	p.ID, p.Payload = raw.ID, raw.Payload
+	if len(raw.Vector) > 0 && raw.Vector[0] == '[' {
+		return json.Unmarshal(raw.Vector, &p.Vector)
+	}
+	var named struct {
+		Dense  []float32      `json:"dense"`
+		Sparse *sparse.Vector `json:"bm25"`
+	}
+	if err := json.Unmarshal(raw.Vector, &named); err != nil {
+		return err
+	}
+	p.Vector, p.Sparse = named.Dense, named.Sparse
+	return nil
 }
 
 type ScoredPoint struct {
 	ID      any            `json:"id"` // string UUID or uint64, as stored
 	Score   float32        `json:"score"`
 	Payload map[string]any `json:"payload"`
+	// Dense is the dense vector when requested (SparseSearch).
+	Dense []float32 `json:"-"`
+}
+
+func (p *ScoredPoint) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		ID      any            `json:"id"`
+		Score   float32        `json:"score"`
+		Payload map[string]any `json:"payload"`
+		Vector  struct {
+			Dense []float32 `json:"dense"`
+		} `json:"vector"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	*p = ScoredPoint{ID: raw.ID, Score: raw.Score, Payload: raw.Payload, Dense: raw.Vector.Dense}
+	return nil
 }
 
 // Filter mirrors Qdrant's filter object with equality conditions.
@@ -95,11 +160,54 @@ func (c *Client) CollectionExists(ctx context.Context, name string) (bool, error
 }
 
 // CreateCollection creates a collection with cosine distance and the given vector size.
+// CreateCollection creates a hybrid collection: a named cosine dense vector
+// plus a BM25 sparse vector whose IDF Qdrant computes.
 func (c *Client) CreateCollection(ctx context.Context, name string, vectorSize int) error {
 	body := map[string]any{
-		"vectors": map[string]any{"size": vectorSize, "distance": "Cosine"},
+		"vectors":        map[string]any{DenseName: map[string]any{"size": vectorSize, "distance": "Cosine"}},
+		"sparse_vectors": map[string]any{SparseName: map[string]any{"modifier": "idf"}},
 	}
 	return c.do(ctx, http.MethodPut, "/collections/"+url.PathEscape(name), body, nil)
+}
+
+// Hybrid reports whether a collection has the sparse keyword vector.
+// Collections created before hybrid search have a single unnamed vector.
+func (c *Client) Hybrid(ctx context.Context, name string) (bool, error) {
+	var res struct {
+		Config struct {
+			Params struct {
+				SparseVectors map[string]json.RawMessage `json:"sparse_vectors"`
+			} `json:"params"`
+		} `json:"config"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/collections/"+url.PathEscape(name), nil, &res); err != nil {
+		return false, err
+	}
+	_, ok := res.Config.Params.SparseVectors[SparseName]
+	return ok, nil
+}
+
+// SparseSearch returns the best keyword (BM25) matches together with their
+// dense vectors, so the caller can compute cosine similarity for them too.
+func (c *Client) SparseSearch(ctx context.Context, collection string, kw sparse.Vector, limit int, filter *Filter) ([]ScoredPoint, error) {
+	if len(kw.Indices) == 0 {
+		return nil, nil // a query of only stop words has no keywords
+	}
+	body := map[string]any{
+		"query":        kw,
+		"using":        SparseName,
+		"limit":        limit,
+		"with_payload": true,
+		"with_vector":  []string{DenseName},
+	}
+	if filter != nil {
+		body["filter"] = filter
+	}
+	var res struct {
+		Points []ScoredPoint `json:"points"`
+	}
+	err := c.do(ctx, http.MethodPost, "/collections/"+url.PathEscape(collection)+"/points/query", body, &res)
+	return res.Points, err
 }
 
 // EnsureCollection creates the collection only if it does not exist yet.
@@ -129,11 +237,16 @@ func (c *Client) Upsert(ctx context.Context, collection string, points []Point) 
 }
 
 // Search returns the top `limit` points closest to vector. filter may be nil.
-func (c *Client) Search(ctx context.Context, collection string, vector []float32, limit int, filter *Filter) ([]ScoredPoint, error) {
+// Search returns the closest points by dense vector. using names the vector
+// in a hybrid collection (DenseName); leave it empty for a legacy one.
+func (c *Client) Search(ctx context.Context, collection string, vector []float32, limit int, filter *Filter, using string) ([]ScoredPoint, error) {
 	body := map[string]any{
 		"query":        vector,
 		"limit":        limit,
 		"with_payload": true,
+	}
+	if using != "" {
+		body["using"] = using
 	}
 	if filter != nil {
 		body["filter"] = filter

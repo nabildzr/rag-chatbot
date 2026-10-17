@@ -31,6 +31,15 @@ func (h *Handler) ensureCollection(ctx context.Context) error {
 	if h.indexed.Load() {
 		return nil
 	}
+	hybrid, err := h.deps.Vectors.Hybrid(ctx, h.collection)
+	if err != nil {
+		return err
+	}
+	if !hybrid {
+		log.Printf("collection %s has no keyword index (created before hybrid search); using dense search only", h.collection)
+	}
+	h.named.Store(hybrid)
+	h.hybrid.Store(hybrid && !h.deps.DenseOnly)
 	for field, schema := range map[string]string{
 		"document_id": "keyword", "chunk_index": "integer", "sha256": "keyword", "ready": "bool",
 	} {
