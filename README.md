@@ -88,6 +88,26 @@ Prasyarat: Go 1.22+, Node.js 20+, Docker.
 
 5. Buka http://localhost:5173, upload PDF, lalu mulai bertanya.
 
+## Deploy (VPS)
+
+Satu image Docker (±18 MB, distroless, non-root) berisi API Go dan hasil build
+frontend. App disajikan dari satu origin: frontend di `/`, API di `/api`.
+
+```bash
+cp .env.example .env        # isi GROQ_API_KEY
+docker compose --profile prod up -d --build
+docker compose exec ollama ollama pull nomic-embed-text
+```
+
+App jalan di port `8080` (ubah dengan `APP_PORT`). Qdrant dan Ollama hanya di-bind
+ke `127.0.0.1` karena tidak punya autentikasi. Taruh reverse proxy (Caddy/nginx)
+dengan HTTPS di depan app, lalu set `TRUST_PROXY=true` supaya rate limit memakai
+IP asli dari `X-Forwarded-For`.
+
+> **Perhatian:** belum ada autentikasi. Siapa pun yang bisa membuka app bisa upload
+> dan menghapus dokumen. Untuk demo publik, batasi akses (mis. basic auth di
+> reverse proxy).
+
 ### Environment variable
 
 | Nama             | Default                          | Keterangan |
@@ -102,6 +122,10 @@ Prasyarat: Go 1.22+, Node.js 20+, Docker.
 | `MIN_SCORE`      | `0.64`                           | Skor cosine minimum agar chunk dipakai; `0` = mati |
 | `SCORE_MARGIN`   | `0.10`                           | Buang chunk yang skornya lebih dari ini di bawah hit teratas; `0` = mati |
 | `PORT`           | `8080`                           | |
+| `STATIC_DIR`     | kosong                           | Folder build frontend; jika diisi, API pindah ke `/api` (sudah di-set di image Docker) |
+| `CHAT_RATE_PER_MIN`   | `20`                        | Batas `/chat` per IP per menit; `0` = mati |
+| `INGEST_RATE_PER_MIN` | `5`                         | Batas `/ingest` per IP per menit; `0` = mati |
+| `TRUST_PROXY`    | `false`                          | `true` hanya di belakang reverse proxy yang mengisi `X-Forwarded-For` |
 
 `.env` hanya dibaca untuk development lokal. Variable yang sudah di-set di environment
 selalu menang, jadi di production cukup set lewat systemd, Docker, atau sejenisnya.
@@ -139,12 +163,15 @@ rag-chatbot/
 ├── cmd/api/main.go        # entrypoint, wiring dependency, loader .env
 ├── internal/
 │   ├── handler/           # HTTP: /ingest, /chat (SSE), /documents
+│   ├── server/            # produksi: API di /api + file statis SPA
+│   ├── ratelimit/         # token bucket per IP
 │   ├── rag/               # chunking + prompt builder
 │   ├── pdftext/           # ekstraksi teks PDF per halaman
 │   ├── vector/            # client REST Qdrant
 │   ├── embed/             # client embedding Ollama
 │   └── llm/               # client streaming OpenAI-compatible (Groq)
 ├── web/                   # frontend Vite + React
+├── Dockerfile             # image produksi (frontend + API)
 ├── docs/tech-stack-plan.md
 └── docker-compose.yml
 ```

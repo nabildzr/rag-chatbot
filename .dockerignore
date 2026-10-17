@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+!.env.example
+bin
+tmp
+docs
+web/node_modules
+web/dist
+**/*_test.go

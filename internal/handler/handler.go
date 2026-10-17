@@ -9,6 +9,7 @@ import (
 
 	"github.com/nabildzr/rag-chatbot/internal/llm"
 	"github.com/nabildzr/rag-chatbot/internal/rag"
+	"github.com/nabildzr/rag-chatbot/internal/ratelimit"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
@@ -48,6 +49,10 @@ type Deps struct {
 	// Retrieval filter for /chat; see rag.SelectSources. Zero disables each.
 	MinScore    float32
 	ScoreMargin float32
+
+	// Per-client rate limits; nil means unlimited.
+	ChatLimit   *ratelimit.Limiter
+	IngestLimit *ratelimit.Limiter
 }
 
 type Handler struct {
@@ -62,8 +67,8 @@ func New(deps Deps) *Handler {
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.health)
-	mux.HandleFunc("POST /ingest", h.ingest)
-	mux.HandleFunc("POST /chat", h.chat)
+	mux.HandleFunc("POST /ingest", h.deps.IngestLimit.Wrap(h.ingest))
+	mux.HandleFunc("POST /chat", h.deps.ChatLimit.Wrap(h.chat))
 	mux.HandleFunc("GET /documents", h.listDocuments)
 	mux.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
 	return mux

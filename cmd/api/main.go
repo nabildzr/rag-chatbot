@@ -8,12 +8,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nabildzr/rag-chatbot/internal/embed"
 	"github.com/nabildzr/rag-chatbot/internal/handler"
 	"github.com/nabildzr/rag-chatbot/internal/llm"
 	"github.com/nabildzr/rag-chatbot/internal/pdftext"
 	"github.com/nabildzr/rag-chatbot/internal/rag"
+	"github.com/nabildzr/rag-chatbot/internal/ratelimit"
+	"github.com/nabildzr/rag-chatbot/internal/server"
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
@@ -27,6 +30,8 @@ func main() {
 	if groqKey == "" {
 		log.Print("warning: GROQ_API_KEY is not set; /chat will fail until it is")
 	}
+	// Only enable behind a reverse proxy that sets X-Forwarded-For itself.
+	trustProxy := os.Getenv("TRUST_PROXY") == "true"
 
 	h := handler.New(handler.Deps{
 		Embedder:   embed.New(getenv("OLLAMA_URL", "http://localhost:11434"), getenv("EMBED_MODEL", "nomic-embed-text")),
@@ -37,12 +42,42 @@ func main() {
 
 		MinScore:    getenvFloat("MIN_SCORE", rag.DefaultMinScore),
 		ScoreMargin: getenvFloat("SCORE_MARGIN", rag.DefaultScoreMargin),
+
+		ChatLimit:   limiter("CHAT_RATE_PER_MIN", 20, 10, trustProxy),
+		IngestLimit: limiter("INGEST_RATE_PER_MIN", 5, 3, trustProxy),
 	})
 
+	staticDir := os.Getenv("STATIC_DIR")
+	if staticDir != "" {
+		log.Printf("serving frontend from %s, API under /api", staticDir)
+	}
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           server.New(h.Routes(), staticDir),
+		ReadHeaderTimeout: 10 * time.Second,
+		// No WriteTimeout: /chat streams for as long as the model takes.
+	}
+
 	log.Printf("API listening on :%s", port)
-	if err := http.ListenAndServe(":"+port, h.Routes()); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// limiter builds a per-client limiter from KEY (requests per minute; 0
+// disables it). The burst lets a few requests through back to back.
+func limiter(key string, perMinute, burst int, trustProxy bool) *ratelimit.Limiter {
+	if v := os.Getenv(key); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			log.Fatalf("%s: invalid number %q", key, v)
+		}
+		perMinute = n
+	}
+	if perMinute == 0 {
+		return nil
+	}
+	return ratelimit.New(perMinute, min(burst, perMinute), trustProxy)
 }
 
 func extractPDF(data []byte) ([]rag.Page, error) {
