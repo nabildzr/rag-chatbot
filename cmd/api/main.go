@@ -45,7 +45,12 @@ func main() {
 
 		ChatLimit:   limiter("CHAT_RATE_PER_MIN", 20, 10, trustProxy),
 		IngestLimit: limiter("INGEST_RATE_PER_MIN", 5, 3, trustProxy),
+
+		AdminToken: os.Getenv("ADMIN_TOKEN"),
 	})
+	if os.Getenv("ADMIN_TOKEN") == "" && staticDirSet() {
+		log.Print("warning: ADMIN_TOKEN is not set; anyone can upload and delete documents")
+	}
 
 	staticDir := os.Getenv("STATIC_DIR")
 	if staticDir != "" {
@@ -63,6 +68,9 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
+// staticDirSet reports production mode (the API serves the frontend).
+func staticDirSet() bool { return os.Getenv("STATIC_DIR") != "" }
 
 // limiter builds a per-client limiter from KEY (requests per minute; 0
 // disables it). The burst lets a few requests through back to back.

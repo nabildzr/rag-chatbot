@@ -3,8 +3,10 @@ package handler
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
 	"github.com/nabildzr/rag-chatbot/internal/llm"
@@ -53,6 +55,10 @@ type Deps struct {
 	// Per-client rate limits; nil means unlimited.
 	ChatLimit   *ratelimit.Limiter
 	IngestLimit *ratelimit.Limiter
+
+	// AdminToken, when set, is required as "Authorization: Bearer <token>"
+	// for endpoints that change data (upload, delete). Chat stays public.
+	AdminToken string
 }
 
 type Handler struct {
@@ -67,15 +73,39 @@ func New(deps Deps) *Handler {
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.health)
-	mux.HandleFunc("POST /ingest", h.deps.IngestLimit.Wrap(h.ingest))
+	mux.HandleFunc("GET /config", h.config)
+	mux.HandleFunc("POST /ingest", h.requireAdmin(h.deps.IngestLimit.Wrap(h.ingest)))
 	mux.HandleFunc("POST /chat", h.deps.ChatLimit.Wrap(h.chat))
 	mux.HandleFunc("GET /documents", h.listDocuments)
-	mux.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
+	mux.HandleFunc("DELETE /documents/{id}", h.requireAdmin(h.deleteDocument))
 	return mux
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// config tells the frontend which features are on, so it can hide controls
+// the visitor cannot use.
+func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"admin_required": h.deps.AdminToken != "",
+	})
+}
+
+// requireAdmin checks the bearer token when AdminToken is configured.
+func (h *Handler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.deps.AdminToken != "" {
+			got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(h.deps.AdminToken)) != 1 {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="rag-chatbot"`)
+				writeError(w, http.StatusUnauthorized, "token admin salah atau belum diisi")
+				return
+			}
+		}
+		next(w, r)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

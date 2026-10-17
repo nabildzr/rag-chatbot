@@ -2,10 +2,15 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
+  ApiError,
   deleteDocument,
+  getAdminToken,
+  getConfig,
   ingestPDF,
   listDocuments,
+  setAdminToken,
   streamChat,
+  type AppConfig,
   type DocumentInfo,
   type Source,
   type Turn,
@@ -26,6 +31,27 @@ let nextId = 1
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 export default function App() {
+  const [config, setConfig] = useState<AppConfig | null>(null)
+  const [token, setToken] = useState(getAdminToken)
+  const [tokenDraft, setTokenDraft] = useState('')
+  // Upload and delete are shown when the server needs no token or one is saved.
+  // A wrong token is caught by the server's 401 below.
+  const canEdit = config !== null && (!config.admin_required || token !== '')
+
+  function saveToken(value: string) {
+    setAdminToken(value)
+    setToken(value)
+  }
+
+  // A 401 means the saved token is wrong or was rotated: forget it.
+  function handleAuthError(err: unknown): string {
+    if (err instanceof ApiError && err.status === 401) {
+      saveToken('')
+      return 'Token admin salah. Masukkan lagi.'
+    }
+    return errorText(err)
+  }
+
   const [docs, setDocs] = useState<DocumentInfo[]>([])
   const [docsLoading, setDocsLoading] = useState(true)
   const [docsError, setDocsError] = useState('')
@@ -62,6 +88,9 @@ export default function App() {
     // State is only set after the fetch resolves, which is what effects are for.
     // eslint-disable-next-line react/set-state-in-effect
     refreshDocs(ctrl.signal)
+    getConfig()
+      .then(setConfig)
+      .catch(() => setConfig({ admin_required: false }))
     return () => ctrl.abort()
   }, [])
   useEffect(() => {
@@ -80,7 +109,7 @@ export default function App() {
       await refreshDocs()
       setActiveDoc(doc.document_id)
     } catch (err) {
-      setUploadError(errorText(err))
+      setUploadError(handleAuthError(err))
     } finally {
       setUploading(false)
     }
@@ -95,7 +124,7 @@ export default function App() {
       if (activeDoc === doc.document_id) setActiveDoc('')
       setDocsError('')
     } catch (err) {
-      setDocsError(`Gagal menghapus: ${errorText(err)}`)
+      setDocsError(`Gagal menghapus: ${handleAuthError(err)}`)
     } finally {
       setDeleting(null)
     }
@@ -158,6 +187,38 @@ export default function App() {
       <aside className="sidebar">
         <h1 className="brand">RAG Chatbot</h1>
 
+        {config?.admin_required && !token && (
+          <form
+            className="admin-login"
+            onSubmit={(e) => {
+              e.preventDefault()
+              saveToken(tokenDraft.trim())
+              setTokenDraft('')
+              setUploadError('')
+            }}
+          >
+            <label htmlFor="admin-token">Token admin untuk upload & hapus</label>
+            <div className="admin-row">
+              <input
+                id="admin-token"
+                type="password"
+                value={tokenDraft}
+                onChange={(e) => setTokenDraft(e.target.value)}
+                autoComplete="current-password"
+              />
+              <button type="submit" disabled={!tokenDraft.trim()}>
+                Masuk
+              </button>
+            </div>
+          </form>
+        )}
+        {config?.admin_required && token && (
+          <button className="admin-logout" onClick={() => saveToken('')}>
+            Keluar dari mode admin
+          </button>
+        )}
+
+        {canEdit && (
         <div
           className={`dropzone${dragOver ? ' over' : ''}${uploading ? ' busy' : ''}`}
           onClick={() => !uploading && fileRef.current?.click()}
@@ -196,6 +257,7 @@ export default function App() {
             }}
           />
         </div>
+        )}
         {uploadError && <p className="upload-error">{uploadError}</p>}
 
         <h2 className="section-title">
@@ -227,15 +289,17 @@ export default function App() {
                   {d.pages} hlm · {d.chunks} chunk
                 </span>
               </button>
-              <button
-                className="forget"
-                onClick={() => removeDoc(d)}
-                disabled={deleting === d.document_id}
-                aria-label={`Hapus ${d.filename}`}
-                title="Hapus dokumen"
-              >
-                {deleting === d.document_id ? '…' : '×'}
-              </button>
+              {canEdit && (
+                <button
+                  className="forget"
+                  onClick={() => removeDoc(d)}
+                  disabled={deleting === d.document_id}
+                  aria-label={`Hapus ${d.filename}`}
+                  title="Hapus dokumen"
+                >
+                  {deleting === d.document_id ? '…' : '×'}
+                </button>
+              )}
             </li>
           ))}
         </ul>
