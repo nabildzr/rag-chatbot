@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/nabildzr/rag-chatbot/internal/llm"
 	"github.com/nabildzr/rag-chatbot/internal/rag"
@@ -75,69 +74,20 @@ func lastUserMessage(history []llm.Message) string {
 // Validation and retrieval errors happen before the stream starts and are
 // returned as plain JSON with a 4xx/5xx status.
 func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
-	var req chatRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	req, ok := decodeQuestion(w, r)
+	if !ok {
 		return
 	}
-	req.Question = strings.TrimSpace(req.Question)
-	if req.Question == "" {
-		writeError(w, http.StatusBadRequest, "question is required")
-		return
-	}
-	if utf8.RuneCountInString(req.Question) > maxQuestionLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("question exceeds %d characters", maxQuestionLen))
-		return
-	}
-
 	history := cleanHistory(req.History)
 
-	// Search with the question alone and, for follow-ups, with the previous
-	// question prepended. The standalone query wins when the topic changes,
-	// the combined one when the question only makes sense in context.
-	queries := []string{req.Question}
-	if prev := lastUserMessage(history); prev != "" {
-		queries = append(queries, rag.RetrievalQuery(req.Question, prev))
-	}
-	// Documents still being indexed are not searchable yet.
-	filter := (*vector.Filter)(nil).Not("ready", false)
-	if req.DocumentID != "" {
-		filter = filter.And("document_id", req.DocumentID)
-	}
-
 	ctx := r.Context()
-	var hits []vector.ScoredPoint
-	for _, q := range queries {
-		qvec, err := h.deps.Embedder.EmbedQuery(ctx, q)
-		if err != nil {
-			log.Printf("chat: embed: %v", err)
-			writeError(w, http.StatusBadGateway, "embedding failed")
-			return
-		}
-		found, err := h.deps.Vectors.Search(ctx, Collection, qvec, topK, filter)
-		if err != nil {
-			log.Printf("chat: search: %v", err)
-			writeError(w, http.StatusBadGateway, "search failed")
-			return
-		}
-		hits = append(hits, found...)
+	res, err := h.retrieve(ctx, req.Question, req.DocumentID, history)
+	if err != nil {
+		log.Printf("chat: %v", err)
+		writeError(w, http.StatusBadGateway, "search failed")
+		return
 	}
-	sources := rag.SelectSources(toSources(mergeHits(hits, topK)), h.deps.MinScore, h.deps.ScoreMargin)
-
-	// Questions about a whole document ("what is this about?") match no chunk
-	// better than off-topic ones do, so scores cannot tell them apart. With one
-	// document selected, fall back to its opening chunks and let the model decide.
-	overview := false
-	if len(sources) == 0 && req.DocumentID != "" {
-		var err error
-		sources, err = h.overviewSources(ctx, req.DocumentID)
-		if err != nil {
-			log.Printf("chat: overview: %v", err)
-			writeError(w, http.StatusBadGateway, "search failed")
-			return
-		}
-		overview = len(sources) > 0
-	}
+	sources, overview := res.Sources, res.Overview
 
 	sse, err := newSSE(w)
 	if err != nil {

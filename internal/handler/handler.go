@@ -87,6 +87,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /ingest", h.requireAdmin(h.deps.IngestLimit.Wrap(h.ingest)))
 	mux.HandleFunc("GET /ingest/{id}", h.ingestStatus)
 	mux.HandleFunc("POST /chat", h.deps.ChatLimit.Wrap(h.chat))
+	mux.HandleFunc("POST /search", h.deps.ChatLimit.Wrap(h.search))
 	mux.HandleFunc("GET /documents", h.listDocuments)
 	mux.HandleFunc("DELETE /documents/{id}", h.requireAdmin(h.deleteDocument))
 	return mux
