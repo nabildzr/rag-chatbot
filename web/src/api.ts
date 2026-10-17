@@ -10,6 +10,13 @@ export type Source = {
   chunk_index: number
   score: number
   text: string
+  n: number // the number the answer cites as [n]
+}
+
+// sourceUrl opens the original upload; PDFs jump straight to the page.
+export function sourceUrl(s: Source): string {
+  const url = `${API_BASE}/documents/${encodeURIComponent(s.document_id)}/file`
+  return s.kind === 'pdf' || !s.kind ? `${url}#page=${s.page}` : url
 }
 
 export type DocumentInfo = {

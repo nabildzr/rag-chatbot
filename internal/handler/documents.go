@@ -3,8 +3,12 @@ package handler
 import (
 	"context"
 	"log"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
@@ -139,4 +143,55 @@ func kindOf(p map[string]any) string {
 		return k
 	}
 	return "pdf"
+}
+
+// documentFile serves the original upload, inline, under its own name.
+// Text formats go out as plain text so a browser never renders them as HTML.
+// Everything but PDFs also gets a sandbox CSP; Chrome refuses to show PDFs
+// under one, and its PDF viewer runs isolated anyway.
+func (h *Handler) documentFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if h.deps.Files == nil {
+		writeError(w, http.StatusNotFound, "file storage is off")
+		return
+	}
+	path, err := h.deps.Files.Path(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	records, _, err := h.deps.Vectors.Scroll(r.Context(), h.collection, vector.MatchField("document_id", id).And("chunk_index", 0), 1, nil)
+	if err != nil || len(records) == 0 {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+	name := str(records[0].Payload["filename"])
+
+	f, err := os.Open(path)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot read file")
+		return
+	}
+
+	ctype := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+	switch kindOf(records[0].Payload) {
+	case "txt", "md":
+		ctype = "text/plain; charset=utf-8"
+	}
+	if ctype == "" {
+		ctype = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if kindOf(records[0].Payload) != "pdf" {
+		w.Header().Set("Content-Security-Policy", "sandbox")
+	}
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": name}))
+	http.ServeContent(w, r, name, info.ModTime(), f)
 }

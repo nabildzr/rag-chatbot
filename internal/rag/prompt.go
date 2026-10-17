@@ -3,6 +3,7 @@ package rag
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +17,8 @@ type Source struct {
 	ChunkIndex int     `json:"chunk_index"`
 	Score      float32 `json:"score"`
 	Text       string  `json:"text"`
+	// N is the number the source had in the prompt, which answers cite as [N].
+	N int `json:"n"`
 }
 
 // Defaults tuned with cmd/eval on bge-m3 (cosine): the expected chunk scored
@@ -106,7 +109,27 @@ func unit(kind string) string {
 		return "page"
 	case "pptx":
 		return "slide"
+	case "image":
+		return "image"
 	default:
 		return "section"
 	}
 }
+
+// CitedNumbers returns the distinct source numbers an answer cites, as
+// [n] or the fullwidth 【n】 some models write, in order of first use.
+func CitedNumbers(answer string) []int {
+	var out []int
+	seen := map[int]bool{}
+	for _, m := range citationNumber.FindAllStringSubmatch(answer, -1) {
+		digits := m[1] + m[2]
+		n, err := strconv.Atoi(digits)
+		if err == nil && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+var citationNumber = regexp.MustCompile(`\[(\d+)\]|【(\d+)】`)

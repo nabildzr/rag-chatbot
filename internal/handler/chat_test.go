@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -195,7 +196,7 @@ func TestChatOverviewFallbackForSelectedDocument(t *testing.T) {
 		}},
 		hits: []vector.ScoredPoint{{ID: "p1", Score: 0.55, Payload: oneHit[0].Payload}},
 	}
-	model := &fakeLLM{tokens: []string{"Ringkasan."}}
+	model := &fakeLLM{tokens: []string{"Ringkasan [1]."}}
 	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: store, LLM: model, MinScore: 0.64}).Routes()
 
 	body := postChat(h, `{"question":"apa inti dokumen ini?","document_id":"d1"}`).Body.String()
@@ -208,5 +209,39 @@ func TestChatOverviewFallbackForSelectedDocument(t *testing.T) {
 	}
 	if !strings.Contains(body, `"score":0`) {
 		t.Fatalf("overview sources should have score 0: %s", body)
+	}
+}
+
+func TestChatSendsOnlyCitedSources(t *testing.T) {
+	two := []vector.ScoredPoint{oneHit[0], {ID: "p2", Score: 0.86, Payload: map[string]any{
+		"document_id": "d1", "filename": "other.pdf", "page": float64(9), "chunk_index": float64(1), "text": "lain",
+	}}}
+	for answer, wantFiles := range map[string][]string{
+		"Jawabannya ada di [2].":                      {"other.pdf"},
+		"Saya tidak menemukan informasi itu.":         {},
+		"Lihat 【1】 dan [2], juga [7] yang tidak ada.": {"notes.pdf", "other.pdf"},
+	} {
+		h := New(Deps{Embedder: fakeEmbedder{}, Vectors: &searchStore{fakeStore: fakeStore{exists: true}, hits: two}, LLM: &fakeLLM{tokens: []string{answer}}}).Routes()
+		body := postChat(h, `{"question":"apa?"}`).Body.String()
+		i := strings.Index(body, "event: sources\ndata: ")
+		line := body[i+len("event: sources\ndata: "):]
+		line = line[:strings.Index(line, "\n")]
+		var got []struct {
+			Filename string
+			N        int
+		}
+		json.Unmarshal([]byte(line), &got)
+		if len(got) != len(wantFiles) {
+			t.Errorf("%q: got %+v, want %v", answer, got, wantFiles)
+			continue
+		}
+		for k := range got {
+			if got[k].Filename != wantFiles[k] {
+				t.Errorf("%q: got %+v, want %v", answer, got, wantFiles)
+			}
+		}
+		if answer == "Jawabannya ada di [2]." && got[0].N != 2 {
+			t.Errorf("source must keep its prompt number 2, got %d", got[0].N)
+		}
 	}
 }

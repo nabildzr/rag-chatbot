@@ -76,3 +76,11 @@ func TestStripCitations(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestCitedNumbers(t *testing.T) {
+	got := CitedNumbers("Cuti 14 hari [2]. Lembur Rp75.000【1】, lihat juga [2][3] dan [x].")
+	want := []int{2, 1, 3}
+	if len(got) != len(want) || got[0] != 2 || got[1] != 1 || got[2] != 3 {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}

@@ -582,3 +582,28 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.source-row > button {
+  flex: 1;
+  min-width: 0;
+}
+
+.open-file {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.open-file:hover {
+  background: var(--accent-soft);
+}

@@ -11,6 +11,7 @@ import {
   ingestFile,
   listDocuments,
   setAdminToken,
+  sourceUrl,
   streamChat,
   unitLabel,
   type AppConfig,
@@ -399,15 +400,21 @@ function MessageView({ message: m }: { message: Message }) {
 
       {m.sources && m.sources.length > 0 && (
         <ol className="sources">
-          {m.sources.map((s, i) => (
-            <li key={i} className={openSource === i ? 'open' : ''}>
-              <button onClick={() => setOpenSource(openSource === i ? null : i)}>
-                <span className="cite">{i + 1}</span>
-                {s.filename}, {unitLabel(s.kind)} {s.page}
-                {s.section_title && <span className="section-title-tag">{s.section_title}</span>}
-                <span className="score">{s.score > 0 ? `${(s.score * 100).toFixed(0)}%` : 'awal dokumen'}</span>
-              </button>
-              {openSource === i && <blockquote>{s.text}</blockquote>}
+          {/* Only cited sources arrive; each keeps the number the answer uses. */}
+          {m.sources.map((s) => (
+            <li key={s.n} className={openSource === s.n ? 'open' : ''}>
+              <div className="source-row">
+                <button onClick={() => setOpenSource(openSource === s.n ? null : s.n)}>
+                  <span className="cite">{s.n}</span>
+                  {s.filename}, {unitLabel(s.kind)} {s.page}
+                  {s.section_title && <span className="section-title-tag">{s.section_title}</span>}
+                  <span className="score">{s.score > 0 ? `${(s.score * 100).toFixed(0)}%` : 'awal dokumen'}</span>
+                </button>
+                <a className="open-file" href={sourceUrl(s)} target="_blank" rel="noopener noreferrer" title="Buka file asli">
+                  Buka ↗
+                </a>
+              </div>
+              {openSource === s.n && <blockquote>{s.text}</blockquote>}
             </li>
           ))}
         </ol>
@@ -453,11 +460,11 @@ function AnswerMarkdown({ text, sources, open }: { text: string; sources?: Sourc
           a({ href, children }) {
             const n = href?.startsWith('#cite-') ? Number(href.slice(6)) : 0
             if (n) {
-              const s = sources?.[n - 1]
+              const s = sources?.find((x) => x.n === n)
               // Sources arrive after the answer has streamed; until then the
               // marker is shown but not clickable.
               return s ? (
-                <button className="cite" onClick={() => open(n - 1)} title={`${s.filename}, ${unitLabel(s.kind)} ${s.page}`}>
+                <button className="cite" onClick={() => open(n)} title={`${s.filename}, ${unitLabel(s.kind)} ${s.page}`}>
                   {n}
                 </button>
               ) : (

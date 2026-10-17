@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/nabildzr/rag-chatbot/internal/store"
 
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
@@ -94,5 +97,34 @@ func TestListHidesDocumentsStillIndexing(t *testing.T) {
 	// Documents indexed before the "ready" flag existed have no such field and stay visible.
 	if len(docs) != 1 || docs[0].DocumentID != "old" || docs[0].Kind != "pdf" {
 		t.Fatalf("got %+v", docs)
+	}
+}
+
+func TestDocumentFile(t *testing.T) {
+	files, _ := store.New(t.TempDir())
+	id := vector.NewID()
+	files.Save(id, ".md", []byte("# Judul\n<script>alert(1)</script>"))
+	vs := &fakeStore{exists: true, points: []vector.Point{{ID: "p", Payload: map[string]any{
+		"document_id": id, "filename": "catatan rapat.md", "chunk_index": 0, "kind": "md",
+	}}}}
+	h := New(Deps{Vectors: vs, Files: files}).Routes()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/documents/"+id+"/file", nil))
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(), "# Judul") {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body)
+	}
+	hdr := rec.Header()
+	if hdr.Get("Content-Type") != "text/plain; charset=utf-8" || hdr.Get("Content-Security-Policy") != "sandbox" ||
+		!strings.Contains(hdr.Get("Content-Disposition"), `filename="catatan rapat.md"`) {
+		t.Fatalf("headers: %v", hdr)
+	}
+
+	for _, bad := range []string{vector.NewID(), "..%2F..%2Fetc%2Fpasswd"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/documents/"+bad+"/file", nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status %d", bad, rec.Code)
+		}
 	}
 }

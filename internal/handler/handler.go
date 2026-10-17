@@ -122,6 +122,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /search", h.deps.ChatLimit.Wrap(h.search))
 	mux.HandleFunc("GET /documents", h.listDocuments)
 	mux.HandleFunc("DELETE /documents/{id}", h.requireAdmin(h.deleteDocument))
+	mux.HandleFunc("GET /documents/{id}/file", h.documentFile)
 	return mux
 }
 

@@ -103,11 +103,16 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for i := range sources {
+		sources[i].N = i + 1 // the numbers the prompt shows and the answer cites
+	}
 	messages := make([]llm.Message, 0, len(history)+2)
 	messages = append(messages, llm.Message{Role: "system", Content: rag.SystemPrompt})
 	messages = append(messages, history...)
 	messages = append(messages, llm.Message{Role: "user", Content: rag.BuildUserPrompt(req.Question, sources, overview)})
+	var answer strings.Builder
 	err = h.deps.LLM.Stream(ctx, messages, func(token string) error {
+		answer.WriteString(token)
 		return sse.send("token", map[string]string{"text": token})
 	})
 	if err != nil {
@@ -117,8 +122,22 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	sse.send("sources", sources)
+	sse.send("sources", citedSources(sources, answer.String()))
 	sse.send("done", struct{}{})
+}
+
+// citedSources keeps only the sources the answer cites, so an answer that
+// says it found nothing shows no sources, and passages the model ignored are
+// not presented as evidence. Each keeps its prompt number N.
+func citedSources(sources []rag.Source, answer string) []rag.Source {
+	out := []rag.Source{}
+	for _, n := range rag.CitedNumbers(answer) {
+		if n >= 1 && n <= len(sources) {
+			out = append(out, sources[n-1])
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].N < out[j].N })
+	return out
 }
 
 // overviewSources returns the first rag.OverviewChunks chunks of a document.
