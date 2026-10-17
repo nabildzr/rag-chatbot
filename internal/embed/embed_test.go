@@ -71,3 +71,44 @@ func TestEmbedErrorStatus(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestBGEModelHasNoPrefixAndDimensionIsCached(t *testing.T) {
+	var inputs []string
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct{ Input []string }
+		json.NewDecoder(r.Body).Decode(&body)
+		inputs = body.Input
+		json.NewEncoder(w).Encode(map[string]any{"embeddings": [][]float32{{0.1, 0.2, 0.3}}})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "bge-m3")
+	if _, err := c.EmbedQuery(context.Background(), "apa itu RAG?"); err != nil {
+		t.Fatal(err)
+	}
+	if inputs[0] != "apa itu RAG?" {
+		t.Fatalf("bge-m3 must not get a prefix: %q", inputs[0])
+	}
+	for i := 0; i < 2; i++ {
+		if d, err := c.Dimension(context.Background()); err != nil || d != 3 {
+			t.Fatalf("dimension %d, %v", d, err)
+		}
+	}
+	if calls != 2 { // one query + one probe
+		t.Fatalf("dimension probe not cached: %d calls", calls)
+	}
+}
+
+func TestCollectionName(t *testing.T) {
+	for model, want := range map[string]string{
+		"bge-m3":                  "chunks_bge-m3",
+		"nomic-embed-text:latest": "chunks_nomic-embed-text_latest",
+		"BAAI/BGE-M3":             "chunks_baai_bge-m3",
+	} {
+		if got := CollectionName(model); got != want {
+			t.Errorf("%s: got %s, want %s", model, got, want)
+		}
+	}
+}

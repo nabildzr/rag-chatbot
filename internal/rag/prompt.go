@@ -18,10 +18,14 @@ type Source struct {
 	Text       string  `json:"text"`
 }
 
-// Defaults tuned on nomic-embed-text with cosine distance: relevant chunks
-// scored 0.65-0.81, the best chunk for off-topic questions 0.60-0.63.
+// Defaults tuned with cmd/eval on bge-m3 (cosine): the expected chunk scored
+// at least 0.482 (median 0.65), the best chunk for off-topic questions at
+// most 0.475 (median 0.38). The floor
+// sits slightly below the gap, preferring recall: a weak extra chunk only
+// costs a model call that answers "not found", a missed one loses the answer.
+// nomic-embed-text scores higher overall; use MIN_SCORE=0.64 with it.
 const (
-	DefaultMinScore    = 0.64
+	DefaultMinScore    = 0.45
 	DefaultScoreMargin = 0.10
 )
 

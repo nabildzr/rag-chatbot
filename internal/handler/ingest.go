@@ -175,13 +175,13 @@ func (h *Handler) index(ctx context.Context, j *job, data []byte) (*document, er
 				},
 			}
 		}
-		if err := h.deps.Vectors.Upsert(ctx, Collection, points); err != nil {
+		if err := h.deps.Vectors.Upsert(ctx, h.collection, points); err != nil {
 			return nil, err
 		}
 		h.jobs.update(j, "embedding", start+len(batch), len(chunks))
 	}
 
-	if err := h.deps.Vectors.SetPayload(ctx, Collection, map[string]any{"ready": true},
+	if err := h.deps.Vectors.SetPayload(ctx, h.collection, map[string]any{"ready": true},
 		vector.MatchField("document_id", j.DocumentID)); err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func (h *Handler) index(ctx context.Context, j *job, data []byte) (*document, er
 func (h *Handler) cleanup(docID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := h.deps.Vectors.DeleteByFilter(ctx, Collection, vector.MatchField("document_id", docID)); err != nil {
+	if err := h.deps.Vectors.DeleteByFilter(ctx, h.collection, vector.MatchField("document_id", docID)); err != nil {
 		log.Printf("cleanup %s: %v", docID, err)
 	}
 	if h.deps.Files != nil {
@@ -212,7 +212,7 @@ func (h *Handler) cleanup(docID string) {
 
 // findByHash returns the ID of an indexed document with this content hash.
 func (h *Handler) findByHash(ctx context.Context, hash string) (string, error) {
-	records, _, err := h.deps.Vectors.Scroll(ctx, Collection, vector.MatchField("sha256", hash), 1, nil)
+	records, _, err := h.deps.Vectors.Scroll(ctx, h.collection, vector.MatchField("sha256", hash), 1, nil)
 	if err != nil || len(records) == 0 {
 		return "", err
 	}

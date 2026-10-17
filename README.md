@@ -50,7 +50,7 @@ Prasyarat: Go 1.22+, Node.js 20+, Docker.
 
    ```bash
    docker compose up -d
-   docker compose exec ollama ollama pull nomic-embed-text
+   docker compose exec ollama ollama pull bge-m3
    ```
 
    Dashboard Qdrant tersedia di http://localhost:6333/dashboard.
@@ -96,7 +96,7 @@ frontend. App disajikan dari satu origin: frontend di `/`, API di `/api`.
 ```bash
 cp .env.example .env        # isi GROQ_API_KEY
 docker compose --profile prod up -d --build
-docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull bge-m3
 ```
 
 App jalan di port `8080` (ubah dengan `APP_PORT`). Qdrant dan Ollama hanya di-bind

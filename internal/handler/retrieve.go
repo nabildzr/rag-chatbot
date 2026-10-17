@@ -41,8 +41,9 @@ type retrieval struct {
 }
 
 // retrieve finds the chunks that answer question. It is the whole
-// retrieval pipeline shared by /chat and /search.
-func (h *Handler) retrieve(ctx context.Context, question, docID string, history []llm.Message) (retrieval, error) {
+// retrieval pipeline shared by /chat and /search. raw skips the score
+// filters and the overview fallback, returning plain top-k results.
+func (h *Handler) retrieve(ctx context.Context, question, docID string, history []llm.Message, raw bool) (retrieval, error) {
 	// Search with the question alone and, for follow-ups, with the previous
 	// question prepended. The standalone query wins when the topic changes,
 	// the combined one when the question only makes sense in context.
@@ -62,13 +63,17 @@ func (h *Handler) retrieve(ctx context.Context, question, docID string, history 
 		if err != nil {
 			return retrieval{}, fmt.Errorf("embed: %w", err)
 		}
-		found, err := h.deps.Vectors.Search(ctx, Collection, qvec, topK, filter)
+		found, err := h.deps.Vectors.Search(ctx, h.collection, qvec, topK, filter)
 		if err != nil {
 			return retrieval{}, fmt.Errorf("search: %w", err)
 		}
 		hits = append(hits, found...)
 	}
-	sources := rag.SelectSources(toSources(mergeHits(hits, topK)), h.deps.MinScore, h.deps.ScoreMargin)
+	sources := toSources(mergeHits(hits, topK))
+	if raw {
+		return retrieval{Sources: sources}, nil
+	}
+	sources = rag.SelectSources(sources, h.deps.MinScore, h.deps.ScoreMargin)
 	if len(sources) > 0 || docID == "" {
 		return retrieval{Sources: sources}, nil
 	}
@@ -90,7 +95,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := h.retrieve(r.Context(), req.Question, req.DocumentID, cleanHistory(req.History))
+	res, err := h.retrieve(r.Context(), req.Question, req.DocumentID, cleanHistory(req.History), req.Raw)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "search failed")
 		return

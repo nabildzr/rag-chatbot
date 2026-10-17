@@ -38,11 +38,12 @@ func main() {
 		log.Fatalf("DATA_DIR: %v", err)
 	}
 
+	embedModel := getenv("EMBED_MODEL", embed.DefaultModel)
 	h := handler.New(handler.Deps{
-		Embedder:   embed.New(getenv("OLLAMA_URL", "http://localhost:11434"), getenv("EMBED_MODEL", "nomic-embed-text")),
+		Embedder:   embed.New(getenv("OLLAMA_URL", "http://localhost:11434"), embedModel),
+		Collection: getenv("COLLECTION", embed.CollectionName(embedModel)),
 		Vectors:    vector.New(getenv("QDRANT_URL", "http://localhost:6333"), os.Getenv("QDRANT_API_KEY")),
 		LLM:        llm.New(getenv("LLM_BASE_URL", llm.DefaultBaseURL), groqKey, getenv("GROQ_MODEL", "openai/gpt-oss-120b")),
-		VectorSize: embed.Dimension,
 		Files:      files,
 
 		MinScore:    getenvFloat("MIN_SCORE", rag.DefaultMinScore),

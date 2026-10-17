@@ -45,6 +45,7 @@ var (
 	qfile   = flag.String("questions", "eval/questions.json", "questions with expected sections")
 	keep    = flag.Bool("keep", false, "keep uploaded documents afterwards")
 	verbose = flag.Bool("v", false, "print every miss")
+	tune    = flag.Bool("tune", false, "search without score filters and suggest MIN_SCORE")
 	token   = os.Getenv("ADMIN_TOKEN")
 )
 
@@ -91,6 +92,9 @@ func main() {
 		rr            float64
 	}
 	byType := map[string]*stats{}
+	// For -tune: the score of the expected chunk (in-scope) and of the best
+	// chunk (off-topic). A good MIN_SCORE keeps the first and drops the second.
+	var inScores, offScores []float32
 	start := time.Now()
 	for _, q := range questions {
 		sources, err := search(q.Q)
@@ -105,6 +109,9 @@ func main() {
 		s.n++
 
 		if q.Type == "offtopic" {
+			if len(sources) > 0 {
+				offScores = append(offScores, sources[0].Score)
+			}
 			if len(sources) == 0 {
 				s.hit1++
 				s.hit5++
@@ -121,6 +128,9 @@ func main() {
 				rank = i + 1
 				break
 			}
+		}
+		if rank > 0 {
+			inScores = append(inScores, sources[rank-1].Score)
 		}
 		if rank == 1 {
 			s.hit1++
@@ -159,6 +169,42 @@ func main() {
 	}
 	fmt.Printf("| **in-scope total** | %d | %.0f%% | %.0f%% | %.2f |\n", total.n, pct(total.hit1, total.n), pct(total.hit5, total.n), total.rr/float64(total.n))
 	fmt.Printf("\n%d questions in %s\n", len(questions), time.Since(start).Round(time.Second))
+	if *tune {
+		suggest(inScores, offScores, total.n)
+	}
+}
+
+// suggest picks the MIN_SCORE that keeps the most expected chunks while
+// rejecting the most off-topic questions, counting both equally.
+func suggest(in, off []float32, inScope int) {
+	sort.Slice(in, func(i, j int) bool { return in[i] < in[j] })
+	sort.Slice(off, func(i, j int) bool { return off[i] < off[j] })
+	if len(in) > 0 {
+		fmt.Printf("expected-chunk scores: min %.3f, median %.3f\n", in[0], in[len(in)/2])
+	}
+	if len(off) > 0 {
+		fmt.Printf("off-topic best scores: max %.3f, median %.3f\n", off[len(off)-1], off[len(off)/2])
+	}
+	best, bestT := -1, float32(0)
+	for t := float32(0.30); t <= 0.90; t += 0.01 {
+		kept := countAtLeast(in, t)
+		rejected := len(off) - countAtLeast(off, t)
+		if kept+rejected > best {
+			best, bestT = kept+rejected, t
+		}
+	}
+	fmt.Printf("suggested MIN_SCORE=%.2f (keeps expected chunks for %d of %d questions, rejects %d of %d off-topic)\n",
+		bestT, countAtLeast(in, bestT), inScope, len(off)-countAtLeast(off, bestT), len(off))
+}
+
+func countAtLeast(xs []float32, t float32) int {
+	n := 0
+	for _, x := range xs {
+		if x >= t {
+			n++
+		}
+	}
+	return n
 }
 
 func pct(a, n int) float64 { return 100 * float64(a) / float64(max(n, 1)) }
@@ -240,7 +286,7 @@ func ingest(path string) (id string, isNew bool, err error) {
 }
 
 func search(q string) ([]source, error) {
-	payload, _ := json.Marshal(map[string]string{"question": q})
+	payload, _ := json.Marshal(map[string]any{"question": q, "raw": *tune})
 	resp, err := do(func() *http.Request {
 		req, _ := http.NewRequest(http.MethodPost, *api+"/search", bytes.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")

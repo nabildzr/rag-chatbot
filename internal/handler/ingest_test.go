@@ -33,6 +33,8 @@ func (fakeEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {
 	return []float32{1, 0}, nil
 }
 
+func (fakeEmbedder) Dimension(context.Context) (int, error) { return 2, nil }
+
 // fakeStore is an in-memory VectorStore with equality-only filters. Ingest
 // runs in the background, so access is locked.
 type fakeStore struct {
@@ -189,7 +191,7 @@ func uploadAndWait(t *testing.T, h *Handler, filename string, content []byte) jo
 func TestIngestIndexesChunksInBackground(t *testing.T) {
 	vs := &fakeStore{}
 	files, _ := store.New(t.TempDir())
-	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extract: twoPages, VectorSize: 2, Files: files})
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: vs, Extract: twoPages, Files: files})
 
 	snap := uploadAndWait(t, h, "notes.pdf", []byte("%PDF-1.7 fake"))
 	if snap.Status != "done" || snap.Done != 2 || snap.Total != 2 || snap.Document == nil {

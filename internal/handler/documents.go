@@ -21,7 +21,11 @@ type document struct {
 // ensureCollection creates the chunks collection and its payload indexes.
 // Index creation is idempotent, so it runs until it first succeeds.
 func (h *Handler) ensureCollection(ctx context.Context) error {
-	if err := h.deps.Vectors.EnsureCollection(ctx, Collection, h.deps.VectorSize); err != nil {
+	dim, err := h.deps.Embedder.Dimension(ctx)
+	if err != nil {
+		return err
+	}
+	if err := h.deps.Vectors.EnsureCollection(ctx, h.collection, dim); err != nil {
 		return err
 	}
 	if h.indexed.Load() {
@@ -30,7 +34,7 @@ func (h *Handler) ensureCollection(ctx context.Context) error {
 	for field, schema := range map[string]string{
 		"document_id": "keyword", "chunk_index": "integer", "sha256": "keyword", "ready": "bool",
 	} {
-		if err := h.deps.Vectors.CreatePayloadIndex(ctx, Collection, field, schema); err != nil {
+		if err := h.deps.Vectors.CreatePayloadIndex(ctx, h.collection, field, schema); err != nil {
 			return err
 		}
 	}
@@ -42,7 +46,7 @@ func (h *Handler) ensureCollection(ctx context.Context) error {
 // is represented by its first chunk, which carries the document-level fields.
 func (h *Handler) listDocuments(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	exists, err := h.deps.Vectors.CollectionExists(ctx, Collection)
+	exists, err := h.deps.Vectors.CollectionExists(ctx, h.collection)
 	if err != nil {
 		log.Printf("documents: %v", err)
 		writeError(w, http.StatusBadGateway, "vector store unavailable")
@@ -57,7 +61,7 @@ func (h *Handler) listDocuments(w http.ResponseWriter, r *http.Request) {
 	filter := vector.MatchField("chunk_index", 0).Not("ready", false)
 	var offset any
 	for {
-		records, next, err := h.deps.Vectors.Scroll(ctx, Collection, filter, 256, offset)
+		records, next, err := h.deps.Vectors.Scroll(ctx, h.collection, filter, 256, offset)
 		if err != nil {
 			log.Printf("documents: %v", err)
 			writeError(w, http.StatusBadGateway, "vector store unavailable")
@@ -91,10 +95,10 @@ func (h *Handler) deleteDocument(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	filter := vector.MatchField("document_id", id)
 
-	exists, err := h.deps.Vectors.CollectionExists(ctx, Collection)
+	exists, err := h.deps.Vectors.CollectionExists(ctx, h.collection)
 	if err == nil && exists {
 		var records []vector.Record
-		records, _, err = h.deps.Vectors.Scroll(ctx, Collection, filter, 1, nil)
+		records, _, err = h.deps.Vectors.Scroll(ctx, h.collection, filter, 1, nil)
 		exists = len(records) > 0
 	}
 	if err != nil {
@@ -107,7 +111,7 @@ func (h *Handler) deleteDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.deps.Vectors.DeleteByFilter(ctx, Collection, filter); err != nil {
+	if err := h.deps.Vectors.DeleteByFilter(ctx, h.collection, filter); err != nil {
 		log.Printf("delete %s: %v", id, err)
 		writeError(w, http.StatusBadGateway, "delete failed")
 		return

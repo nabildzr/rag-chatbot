@@ -26,6 +26,7 @@ type chatRequest struct {
 	Question   string        `json:"question"`
 	DocumentID string        `json:"document_id"` // optional; empty searches all documents
 	History    []llm.Message `json:"history"`     // optional; earlier turns, oldest first
+	Raw        bool          `json:"raw"`         // /search only: skip score filters and overview, for tuning
 }
 
 // cleanHistory keeps the last maxHistory user/assistant messages, truncates
@@ -81,7 +82,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	history := cleanHistory(req.History)
 
 	ctx := r.Context()
-	res, err := h.retrieve(ctx, req.Question, req.DocumentID, history)
+	res, err := h.retrieve(ctx, req.Question, req.DocumentID, history, false)
 	if err != nil {
 		log.Printf("chat: %v", err)
 		writeError(w, http.StatusBadGateway, "search failed")
@@ -126,7 +127,7 @@ func (h *Handler) overviewSources(ctx context.Context, docID string) ([]rag.Sour
 	var sources []rag.Source
 	for i := 0; i < rag.OverviewChunks; i++ {
 		filter := vector.MatchField("document_id", docID).And("chunk_index", i).Not("ready", false)
-		records, _, err := h.deps.Vectors.Scroll(ctx, Collection, filter, 1, nil)
+		records, _, err := h.deps.Vectors.Scroll(ctx, h.collection, filter, 1, nil)
 		if err != nil {
 			return nil, err
 		}

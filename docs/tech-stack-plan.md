@@ -61,7 +61,7 @@ volumes:
 
 Setelah compose up:
 ```bash
-docker exec <ollama-container> ollama pull nomic-embed-text
+docker exec <ollama-container> ollama pull bge-m3
 ```
 
 > Catatan: LLM 7B+ sengaja TIDAK dijalankan di VPS (CPU 4 core terlalu lambat

@@ -16,13 +16,13 @@ import (
 	"github.com/nabildzr/rag-chatbot/internal/vector"
 )
 
-// Collection holds the chunks of every document; document_id in the payload
-// tells them apart.
-const Collection = "chunks"
+// DefaultCollection is used when Deps.Collection is empty.
+const DefaultCollection = "chunks"
 
 type Embedder interface {
 	EmbedDocuments(ctx context.Context, chunks []string) ([][]float32, error)
 	EmbedQuery(ctx context.Context, question string) ([]float32, error)
+	Dimension(ctx context.Context) (int, error)
 }
 
 type VectorStore interface {
@@ -44,11 +44,15 @@ type LLM interface {
 type ExtractFunc func(filename string, data []byte) (*extract.Document, error)
 
 type Deps struct {
-	Embedder   Embedder
-	Vectors    VectorStore
-	LLM        LLM
-	Extract    ExtractFunc // nil: extract.Extract
-	VectorSize int
+	Embedder Embedder
+	Vectors  VectorStore
+	LLM      LLM
+	Extract  ExtractFunc // nil: extract.Extract
+
+	// Collection holds the chunks of every document; document_id in the
+	// payload tells them apart. Name it after the embedding model: vectors
+	// from different models cannot share one.
+	Collection string
 
 	// Files keeps original uploads for download and re-indexing; nil skips it.
 	Files *store.Files
@@ -68,6 +72,7 @@ type Deps struct {
 
 type Handler struct {
 	deps       Deps
+	collection string
 	indexed    atomic.Bool // payload indexes created
 	jobs       jobList
 	ingestSlot chan struct{} // one background ingest at a time
@@ -77,7 +82,11 @@ func New(deps Deps) *Handler {
 	if deps.Extract == nil {
 		deps.Extract = extract.Extract
 	}
-	return &Handler{deps: deps, ingestSlot: make(chan struct{}, 1)}
+	coll := deps.Collection
+	if coll == "" {
+		coll = DefaultCollection
+	}
+	return &Handler{deps: deps, collection: coll, ingestSlot: make(chan struct{}, 1)}
 }
 
 func (h *Handler) Routes() http.Handler {
