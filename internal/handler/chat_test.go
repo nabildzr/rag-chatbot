@@ -116,3 +116,14 @@ func TestChatValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestChatBelowMinScoreSkipsLLM(t *testing.T) {
+	weak := []vector.ScoredPoint{{ID: "p1", Score: 0.61, Payload: oneHit[0].Payload}}
+	model := &fakeLLM{err: errors.New("should not be called")}
+	h := New(Deps{Embedder: fakeEmbedder{}, Vectors: &searchStore{hits: weak}, LLM: model, MinScore: 0.64}).Routes()
+
+	body := postChat(h, `{"question":"gaji direktur?"}`).Body.String()
+	if model.messages != nil || !strings.Contains(body, notFoundAnswer) || !strings.Contains(body, "event: sources\ndata: []") {
+		t.Fatalf("unexpected: messages=%v body=%s", model.messages, body)
+	}
+}

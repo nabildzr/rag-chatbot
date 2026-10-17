@@ -25,8 +25,10 @@ upsert ke collection Qdrant `chunks`. Kalau gagal di tengah jalan, point yang su
 masuk dihapus lagi, jadi dokumen tidak pernah setengah terindeks.
 
 **Chat** (`POST /chat`): pertanyaan → embedding → similarity search top-5 di Qdrant
-(opsional difilter per dokumen) → prompt dengan konteks bernomor → Groq (streaming)
-→ Server-Sent Events ke browser: `token`… lalu `sources`, lalu `done`.
+(opsional difilter per dokumen) → filter skor relevansi → prompt dengan konteks
+bernomor → Groq (streaming) → Server-Sent Events ke browser: `token`… lalu `sources`,
+lalu `done`. Kalau tidak ada chunk yang lolos filter, API langsung menjawab "tidak
+ditemukan" tanpa memanggil LLM.
 
 ## Stack
 
@@ -88,6 +90,8 @@ Prasyarat: Go 1.22+, Node.js 20+, Docker.
 | `EMBED_MODEL`    | `nomic-embed-text`               | Model lain wajib berdimensi 768, atau ubah `embed.Dimension` |
 | `QDRANT_URL`     | `http://localhost:6333`          | |
 | `QDRANT_API_KEY` | kosong                           | Isi jika Qdrant memakai autentikasi |
+| `MIN_SCORE`      | `0.64`                           | Skor cosine minimum agar chunk dipakai; `0` = mati |
+| `SCORE_MARGIN`   | `0.10`                           | Buang chunk yang skornya lebih dari ini di bawah hit teratas; `0` = mati |
 | `PORT`           | `8080`                           | |
 
 `.env` hanya dibaca untuk development lokal. Variable yang sudah di-set di environment
@@ -152,6 +156,12 @@ atau API key.
   diberi payload index. Daftar dokumen dibaca dari chunk ke-0 setiap dokumen.
 - **Prefix tugas nomic.** Chunk di-embed dengan prefix `search_document:` dan
   pertanyaan dengan `search_query:`, sesuai cara model dilatih.
+- **Filter skor dua lapis.** Ambang absolut (`MIN_SCORE`) menolak pertanyaan di luar
+  topik dokumen. Margin relatif (`SCORE_MARGIN`) membuang chunk lemah yang jauh di
+  bawah hit teratas, supaya tidak ikut ke prompt dan tidak muncul sebagai sumber.
+  Default diukur dengan `nomic-embed-text`: chunk relevan berskor 0,65–0,81,
+  sedangkan hit terbaik untuk pertanyaan di luar topik 0,60–0,63. Sampelnya kecil,
+  jadi sesuaikan untuk dokumen kamu.
 - **Ukuran chunk dihitung dalam kata**, bukan token (±0,75 kata per token), supaya
   tidak butuh tokenizer.
 - **PDF hasil scan** (tanpa lapisan teks) ditolak dengan `422`. OCR belum didukung.

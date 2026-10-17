@@ -42,3 +42,31 @@ func TestChunkPagesSkipsEmptyPages(t *testing.T) {
 		t.Fatalf("want no chunks, got %+v", chunks)
 	}
 }
+
+func TestSelectSources(t *testing.T) {
+	src := func(scores ...float32) []Source {
+		out := make([]Source, len(scores))
+		for i, s := range scores {
+			out[i] = Source{Score: s, ChunkIndex: i}
+		}
+		return out
+	}
+	cases := []struct {
+		name          string
+		in            []Source
+		min, margin   float32
+		wantKeptCount int
+	}{
+		{"relative margin drops weak tail", src(0.77, 0.61, 0.60), 0.64, 0.10, 1},
+		{"close scores all kept", src(0.81, 0.75, 0.72), 0.64, 0.10, 3},
+		{"off-topic question keeps nothing", src(0.63, 0.61, 0.60), 0.64, 0.10, 0},
+		{"zero margin uses only floor", src(0.90, 0.65, 0.60), 0.64, 0, 2},
+		{"zero floor and margin keeps all", src(0.30, 0.10), 0, 0, 2},
+		{"empty input", nil, 0.64, 0.10, 0},
+	}
+	for _, c := range cases {
+		if got := SelectSources(c.in, c.min, c.margin); len(got) != c.wantKeptCount {
+			t.Errorf("%s: kept %d, want %d", c.name, len(got), c.wantKeptCount)
+		}
+	}
+}

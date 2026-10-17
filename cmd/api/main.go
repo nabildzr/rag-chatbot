@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/nabildzr/rag-chatbot/internal/embed"
@@ -33,6 +34,9 @@ func main() {
 		LLM:        llm.New(getenv("LLM_BASE_URL", llm.DefaultBaseURL), groqKey, getenv("GROQ_MODEL", "openai/gpt-oss-120b")),
 		ExtractPDF: extractPDF,
 		VectorSize: embed.Dimension,
+
+		MinScore:    getenvFloat("MIN_SCORE", rag.DefaultMinScore),
+		ScoreMargin: getenvFloat("SCORE_MARGIN", rag.DefaultScoreMargin),
 	})
 
 	log.Printf("API listening on :%s", port)
@@ -79,6 +83,18 @@ func loadDotEnv(path string) error {
 		}
 	}
 	return nil
+}
+
+func getenvFloat(key string, fallback float32) float32 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 32)
+	if err != nil {
+		log.Fatalf("%s: invalid number %q", key, v)
+	}
+	return float32(f)
 }
 
 func getenv(key, fallback string) string {

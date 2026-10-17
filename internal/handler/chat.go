@@ -66,7 +66,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "search failed")
 		return
 	}
-	sources := toSources(hits)
+	sources := rag.SelectSources(toSources(hits), h.deps.MinScore, h.deps.ScoreMargin)
 
 	sse, err := newSSE(w)
 	if err != nil {

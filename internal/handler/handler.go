@@ -44,6 +44,10 @@ type Deps struct {
 	LLM        LLM
 	ExtractPDF ExtractFunc
 	VectorSize int
+
+	// Retrieval filter for /chat; see rag.SelectSources. Zero disables each.
+	MinScore    float32
+	ScoreMargin float32
 }
 
 type Handler struct {

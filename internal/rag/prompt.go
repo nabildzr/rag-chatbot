@@ -15,6 +15,34 @@ type Source struct {
 	Text       string  `json:"text"`
 }
 
+// Defaults tuned on nomic-embed-text with cosine distance: relevant chunks
+// scored 0.65-0.81, the best chunk for off-topic questions 0.60-0.63.
+const (
+	DefaultMinScore    = 0.64
+	DefaultScoreMargin = 0.10
+)
+
+// SelectSources keeps sources that score at least minScore and are within
+// margin of the best score, so weak matches are neither sent to the model
+// nor shown as citations. sources must be sorted by score, best first.
+// A margin <= 0 disables the relative cut.
+func SelectSources(sources []Source, minScore, margin float32) []Source {
+	if len(sources) == 0 {
+		return sources
+	}
+	cutoff := minScore
+	if margin > 0 {
+		cutoff = max(cutoff, sources[0].Score-margin)
+	}
+	kept := sources[:0:0]
+	for _, s := range sources {
+		if s.Score >= cutoff {
+			kept = append(kept, s)
+		}
+	}
+	return kept
+}
+
 const SystemPrompt = `You answer questions using only the numbered context passages provided.
 Rules:
 - Cite the passages you use with their numbers in plain ASCII square brackets, e.g. [1] or [2][3].
